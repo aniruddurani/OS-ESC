@@ -3,6 +3,7 @@ import unittest
 from flowlib.parsers import (
     drc_status,
     parse_lyrdb,
+    parse_mag_ports,
     parse_magic_drc,
     parse_netgen,
     parse_ngspice_meas,
@@ -157,6 +158,17 @@ class PortsTest(unittest.TestCase):
 
     def test_no_ports(self):
         self.assertEqual(parse_ports("nothing\n"), [])
+
+
+class MagPortsTest(unittest.TestCase):
+    def test_ports_ordered_by_index_with_layer(self):
+        mag = ("<< labels >>\nrlabel metal1 0 400 0 400 0 in\nport 2 nsew\n"
+               "rlabel space 178 0 178 0 0 vss\nport 1 nsew\n"
+               "rlabel metal1 5 5 5 5 0 note\n<< end >>\n")
+        self.assertEqual(parse_mag_ports(mag), [("vss", "space"), ("in", "metal1")])
+
+    def test_labels_that_are_not_ports_are_ignored(self):
+        self.assertEqual(parse_mag_ports("magic\nrlabel metal1 0 0 0 0 0 note\n<< end >>\n"), [])
 
 
 class SubcktPortsTest(unittest.TestCase):

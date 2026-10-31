@@ -141,7 +141,7 @@ $(STAMPS)/layout.pass: $(LAYOUT_SCRIPT) Makefile
 	@rm -f $@ $(REPORTS)/layout.json $(GDS) $(BUILD)/*.mag
 	-OUT_DIR=$(BUILD) magic -dnull -noconsole -rcfile $(MAGICRC) $(LAYOUT_SCRIPT) \
 	  > $(LOGS)/layout.log 2>&1
-	$(PY) layout --gds $(GDS) --log $(LOGS)/layout.log --design $(DESIGN) --out $(REPORTS)/layout.json
+	$(PY) layout --gds $(GDS) --mag $(BUILD)/$(DESIGN).mag --log $(LOGS)/layout.log --design $(DESIGN) --out $(REPORTS)/layout.json
 	@touch $@
 
 $(STAMPS)/sim.pass: $(STAMPS)/netlist.pass $(TB) $(SPEC) Makefile

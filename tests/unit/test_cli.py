@@ -39,10 +39,19 @@ class NetlistCommandTest(CliTestBase):
         return main(["netlist", "--netlist", netlist, "--log", log,
                      "--design", "inv", "--out", self.out])
 
+    DEVICE = "XM1 out in vdd vdd sky130_fd_pr__pfet_01v8 L=0.15 W=2\n"
+
     def test_good_netlist_passes(self):
-        n = self.write("inv.spice", ".subckt inv in out vdd vss\n.ends\n")
+        n = self.write("inv.spice", ".subckt inv in out vdd vss\n" + self.DEVICE + ".ends\n")
         self.assertEqual(self.run_netlist(n), 0)
         self.assertEqual(self.report()["status"], "pass")
+        self.assertEqual(self.report()["metrics"], {"devices": 1})
+
+    def test_subckt_without_devices_is_error(self):
+        # Wrong PDK or symbol path: pins but no devices must not pass.
+        n = self.write("inv.spice", ".subckt inv in out vdd vss\n*.ipin in\n.ends\n")
+        self.assertEqual(self.run_netlist(n), 1)
+        self.assertEqual(self.report()["status"], "error")
 
     def test_wrong_port_order_fails(self):
         n = self.write("inv.spice", ".subckt inv vdd vss in out\n.ends\n")
@@ -54,45 +63,63 @@ class NetlistCommandTest(CliTestBase):
         self.assertEqual(self.report()["status"], "error")
 
     def test_error_in_log_is_error(self):
-        n = self.write("inv.spice", ".subckt inv in out vdd vss\n.ends\n")
+        n = self.write("inv.spice", ".subckt inv in out vdd vss\n" + self.DEVICE + ".ends\n")
         self.assertEqual(self.run_netlist(n, "Error: symbol not found\n"), 1)
         self.assertEqual(self.report()["status"], "error")
 
 
 class LayoutCommandTest(CliTestBase):
-    GOOD_LOG = "PORT 1 in\nPORT 2 out\nPORT 3 vdd\nPORT 4 vss\n"
+    GOOD = [("metal1", "in", 1), ("metal1", "out", 2), ("metal1", "vdd", 3), ("metal1", "vss", 4)]
 
-    def run_layout(self, gds_bytes, log_text):
+    @staticmethod
+    def mag(labels):
+        """A .mag with (layer, name, port index) labels, as Magic writes them."""
+        lines = ["magic", "tech sky130A", "<< labels >>"]
+        for layer, name, idx in labels:
+            lines += [f"rlabel {layer} 0 0 0 0 0 {name}", f"port {idx} nsew"]
+        return "\n".join(lines) + "\n<< end >>\n"
+
+    def run_layout(self, gds_bytes, labels):
         gds = self.path("inv.gds")
         if gds_bytes is not None:
             with open(gds, "wb") as f:
                 f.write(gds_bytes)
-        log = self.write("layout.log", log_text)
-        return main(["layout", "--gds", gds, "--log", log,
+        mag = self.write("inv.mag", self.mag(labels))
+        log = self.write("layout.log", "")
+        return main(["layout", "--gds", gds, "--mag", mag, "--log", log,
                      "--design", "inv", "--out", self.out])
 
     def test_gds_and_ports_pass(self):
-        self.assertEqual(self.run_layout(b"\x00\x06\x00\x02\x00\x07", self.GOOD_LOG), 0)
+        self.assertEqual(self.run_layout(b"GDSII", self.GOOD), 0)
         self.assertEqual(self.report()["status"], "pass")
 
     def test_missing_gds_is_error(self):
-        self.assertEqual(self.run_layout(None, self.GOOD_LOG), 1)
+        self.assertEqual(self.run_layout(None, self.GOOD), 1)
         self.assertEqual(self.report()["status"], "error")
 
     def test_empty_gds_is_error(self):
-        self.assertEqual(self.run_layout(b"", self.GOOD_LOG), 1)
+        self.assertEqual(self.run_layout(b"", self.GOOD), 1)
         self.assertEqual(self.report()["status"], "error")
 
     def test_missing_port_fails(self):
-        self.assertEqual(self.run_layout(b"gds", "PORT 1 in\nPORT 2 out\nPORT 3 vdd\n"), 1)
+        self.assertEqual(self.run_layout(b"GDSII", self.GOOD[:3]), 1)
         r = self.report()
         self.assertEqual(r["status"], "fail")
         self.assertIn("vss", r["errors"][0]["message"])
 
     def test_wrong_port_order_fails(self):
-        log = "PORT 1 out\nPORT 2 in\nPORT 3 vdd\nPORT 4 vss\n"
-        self.assertEqual(self.run_layout(b"gds", log), 1)
+        labels = [("metal1", "out", 1), ("metal1", "in", 2)] + self.GOOD[2:]
+        self.assertEqual(self.run_layout(b"GDSII", labels), 1)
         self.assertEqual(self.report()["status"], "fail")
+
+    def test_port_label_on_empty_space_fails(self):
+        # A label with no metal under it connects to nothing; the generator
+        # printing the right names is not evidence the ports exist.
+        labels = self.GOOD[:3] + [("space", "vss", 4)]
+        self.assertEqual(self.run_layout(b"GDSII", labels), 1)
+        r = self.report()
+        self.assertEqual(r["status"], "fail")
+        self.assertIn("vss", r["errors"][0]["message"])
 
 
 class SummaryCommandTest(CliTestBase):
@@ -232,6 +259,16 @@ class DrcCommandTest(CliTestBase):
         self.assertEqual(r["metrics"]["magic_violations"], 1)
         self.assertEqual(r["errors"], [{
             "tool": "magic", "rule": "Metal1 spacing < 0.14um", "where": [1.0, 2.0, 1.5, 2.5]}])
+
+    def test_magic_violation_metric_matches_the_listed_errors(self):
+        # Magic's DRC_COUNT counts rule hits; the metric a person reads must
+        # match the list they fix from.
+        log = "DRC_COUNT 2\nBBOX 0 0 5 5\n" + "".join(
+            f"DRC_ERR 0 0 1 {i} Metal1 spacing < 0.14 (met1.2)\n" for i in range(1, 5))
+        self.assertEqual(self.run_drc(log, self.CLEAN_LYRDB), 1)
+        r = self.report()
+        self.assertEqual(r["metrics"]["magic_violations"], 4)
+        self.assertEqual(len([e for e in r["errors"] if e["tool"] == "magic"]), 4)
 
     def test_klayout_violation_fails(self):
         self.assertEqual(self.run_drc(self.CLEAN_MAGIC, self.ONE_LYRDB), 1)

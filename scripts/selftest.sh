@@ -44,6 +44,13 @@ expect "make exit code is non-zero" "$([ $? -ne 0 ] && echo yes || echo no)" yes
 expect "drc status" "$(status_of $ROOT/lvs_bad/reports/drc.json)" pass
 expect "lvs status" "$(status_of $ROOT/lvs_bad/reports/lvs.json)" fail
 
+echo "lvs_width_bad: right connections but a wrong device width must pass drc and fail lvs"
+make netlist layout drc lvs LAYOUT_SCRIPT=tests/fixtures/inv_lvs_width_bad.tcl BUILD=$ROOT/lvs_width_bad >/dev/null 2>&1
+expect "make exit code is non-zero" "$([ $? -ne 0 ] && echo yes || echo no)" yes
+expect "drc status" "$(status_of $ROOT/lvs_width_bad/reports/drc.json)" pass
+expect "lvs status" "$(status_of $ROOT/lvs_width_bad/reports/lvs.json)" fail
+expect "lvs names the property error" "$(grep -c 'Property errors' $ROOT/lvs_width_bad/reports/lvs.json | sed 's/^[1-9].*/yes/;s/^0$/no/')" yes
+
 if [ "$failures" -eq 0 ]; then
   echo "SELFTEST PASS"
 else

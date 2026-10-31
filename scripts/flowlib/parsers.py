@@ -95,6 +95,44 @@ def parse_ports(log_text):
     return [name for _, name in sorted(ports)]
 
 
+def parse_mag_ports(mag_text):
+    """(name, layer) of every port label in a saved .mag, ordered by port index.
+
+    Magic writes `rlabel <layer> x1 y1 x2 y2 <pos> <name>` followed by
+    `port <index> <dirs>` for a label that is a port; the layer is `space` when
+    nothing was painted under the label."""
+    ports = []
+    last = None
+    for line in mag_text.splitlines():
+        tokens = line.split()
+        if len(tokens) >= 8 and tokens[0] == "rlabel":
+            last = (tokens[7], tokens[1])
+        elif len(tokens) >= 2 and tokens[0] == "port" and tokens[1].isdigit() and last:
+            ports.append((int(tokens[1]), last))
+            last = None
+        else:
+            last = None if tokens and tokens[0] != "rlabel" else last
+    return [label for _, label in sorted(ports)]
+
+
+def count_subckt_devices(spice_text, name):
+    """Number of device instances (X or M lines) inside `.subckt <name>`."""
+    inside = False
+    count = 0
+    for line in spice_text.splitlines():
+        tokens = line.split()
+        if not tokens:
+            continue
+        head = tokens[0].lower()
+        if head == ".subckt":
+            inside = len(tokens) > 1 and tokens[1].lower() == name.lower()
+        elif head == ".ends":
+            inside = False
+        elif inside and head[0] in "xm":
+            count += 1
+    return count
+
+
 def parse_subckt_ports(spice_text, name):
     """Port list of `.subckt <name> ...`, following `+` continuation lines."""
     lines = spice_text.splitlines()

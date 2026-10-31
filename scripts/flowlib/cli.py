@@ -11,12 +11,13 @@ import sys
 
 from flowlib.deck import PORT_ORDER, make_deck
 from flowlib.parsers import (
+    count_subckt_devices,
     drc_status,
     parse_lyrdb,
     parse_magic_drc,
     parse_netgen,
+    parse_mag_ports,
     parse_ngspice_meas,
-    parse_ports,
     parse_subckt_ports,
 )
 from flowlib.report import write_report
@@ -34,6 +35,7 @@ def cmd_netlist(a):
     log_text = _read(a.log) or ""
     text = _read(a.netlist)
     errors = []
+    metrics = {}
     if text is None:
         status = "error"
         errors.append({"message": f"netlist not written: {a.netlist}"})
@@ -42,26 +44,42 @@ def cmd_netlist(a):
         errors += [{"message": l.strip()} for l in log_text.splitlines() if "Error" in l]
     else:
         ports = parse_subckt_ports(text, a.design)
-        if ports == PORT_ORDER:
-            status = "pass"
-        else:
+        devices = count_subckt_devices(text, a.design)
+        metrics = {"devices": devices}
+        if ports != PORT_ORDER:
             status = "fail"
             errors.append({"message": f".subckt {a.design} ports are {ports}, expected {PORT_ORDER}"})
-    return write_report(a.out, "netlist", a.design, status, {}, errors, a.log)
+        elif not devices:
+            # Pins without devices means xschem could not find the symbols
+            # (wrong PDK or path); sim would then fail on the wrong thing.
+            status = "error"
+            errors.append({"message": f".subckt {a.design} contains no devices"})
+        else:
+            status = "pass"
+    return write_report(a.out, "netlist", a.design, status, metrics, errors, a.log)
 
 
 def cmd_layout(a):
-    log_text = _read(a.log) or ""
-    ports = parse_ports(log_text)
+    # Evidence comes from the saved .mag, not from what the generator printed.
+    mag_text = _read(a.mag)
+    labels = parse_mag_ports(mag_text) if mag_text is not None else None
+    ports = [name for name, _ in labels] if labels is not None else []
     errors = []
     if not os.path.exists(a.gds) or os.path.getsize(a.gds) == 0:
         status = "error"
         errors.append({"message": f"GDS not written or empty: {a.gds}"})
+    elif labels is None:
+        status = "error"
+        errors.append({"message": f"layout file not written: {a.mag}"})
     elif ports != PORT_ORDER:
         status = "fail"
         missing = [p for p in PORT_ORDER if p not in ports]
         detail = f"missing {missing}" if missing else "wrong order"
         errors.append({"message": f"ports are {ports}, expected {PORT_ORDER} ({detail})"})
+    elif [n for n, layer in labels if layer == "space"]:
+        status = "fail"
+        floating = [n for n, layer in labels if layer == "space"]
+        errors.append({"message": f"port label(s) {floating} sit on empty space, not on metal"})
     else:
         status = "pass"
     return write_report(a.out, "layout", a.design, status, {"ports": ports}, errors, a.log)
@@ -92,7 +110,9 @@ def cmd_drc(a):
         if off:
             status = "error"
             errors.append({"message": "KLayout rule groups not enabled: " + ", ".join(off)})
-    metrics = {"magic_violations": magic["count"],
+    # Magic's DRC_COUNT counts rule hits; report the boxes a person fixes from.
+    magic_listed = len(magic["violations"]) or magic["count"]
+    metrics = {"magic_violations": magic_listed,
                "klayout_violations": None if klayout is None else len(klayout)}
     return write_report(a.out, "drc", a.design, status, metrics, errors, a.magic_log)
 
@@ -209,6 +229,7 @@ def build_parser():
 
     s = sub.add_parser("layout")
     s.add_argument("--gds", required=True)
+    s.add_argument("--mag", required=True)
     s.add_argument("--log", required=True)
     s.add_argument("--design", required=True)
     s.add_argument("--out", required=True)

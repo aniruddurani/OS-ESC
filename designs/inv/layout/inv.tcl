@@ -8,10 +8,11 @@
 # Metal1 bars join the two gates (in) and the two drains (out).
 # Units are microns; magic's internal grid is 5 nm.
 
-set W_N 1.0
-set W_P 2.0
-set L   0.15
-set YP  4.0
+# Device sizes; a fixture may set these before sourcing this file to build a
+# layout that disagrees with the schematic.
+foreach {var default} {W_N 1.0 W_P 2.0 L 0.15 YP 4.0} {
+    if {![info exists $var]} { set $var $default }
+}
 
 cd $::env(OUT_DIR)
 snap internal
