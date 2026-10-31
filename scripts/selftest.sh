@@ -33,6 +33,11 @@ m = json.load(open('$ROOT/drc_bad/reports/drc.json'))['metrics']
 print((m['magic_violations'] or 0) + (m['klayout_violations'] or 0))" 2>/dev/null || echo 0)
 expect "at least one violation reported" "$([ "$violations" -ge 1 ] && echo yes || echo no)" yes
 
+echo "stop at first failure: after a failed drc, lvs must not run on that layout"
+make lvs LAYOUT_SCRIPT=tests/fixtures/inv_drc_bad.tcl BUILD=$ROOT/drc_bad >/dev/null 2>&1
+expect "make exit code is non-zero" "$([ $? -ne 0 ] && echo yes || echo no)" yes
+expect "lvs.json was not written" "$([ ! -e $ROOT/drc_bad/reports/lvs.json ] && echo yes || echo no)" yes
+
 echo "lvs_bad: a missing connection must pass drc and fail lvs"
 make netlist layout drc lvs LAYOUT_SCRIPT=tests/fixtures/inv_lvs_bad.tcl BUILD=$ROOT/lvs_bad >/dev/null 2>&1
 expect "make exit code is non-zero" "$([ $? -ne 0 ] && echo yes || echo no)" yes

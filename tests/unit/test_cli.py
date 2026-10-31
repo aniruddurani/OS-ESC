@@ -133,6 +133,20 @@ class SummaryCommandTest(CliTestBase):
         self.assertEqual(r["status"], "fail")
         self.assertEqual(r["metrics"]["stages"]["pex"], "missing")
 
+    def test_pass_report_without_its_stamp_is_stale(self):
+        # drc failed on this run; the lvs/pex reports on disk are from an
+        # earlier run and must not read as passes.
+        self.write_reports({s: "pass" for s in self.STAGES})
+        os.makedirs(self.path("stamps"), exist_ok=True)
+        for s in ["netlist", "sim", "layout"]:
+            self.write(os.path.join("stamps", f"{s}.pass"), "")
+        rc = main(["summary", "--reports", self.path("reports"), "--stamps", self.path("stamps"),
+                   "--design", "inv", "--out", self.out])
+        self.assertEqual(rc, 1)
+        stages = self.report()["metrics"]["stages"]
+        self.assertEqual(stages["layout"], "pass")
+        self.assertEqual([stages[s] for s in ("drc", "lvs", "pex")], ["stale"] * 3)
+
     def test_unreadable_report_is_error(self):
         self.write_reports({s: "pass" for s in self.STAGES})
         self.write(os.path.join("reports", "drc.json"), "{not json")

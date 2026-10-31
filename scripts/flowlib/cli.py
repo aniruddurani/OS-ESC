@@ -130,6 +130,11 @@ def cmd_summary(a):
             stages[stage] = json.loads(text)["status"]
         except (ValueError, KeyError, TypeError):
             stages[stage] = "error"
+        # A pass is only current if this run stamped it; otherwise the report
+        # is left over from an earlier run.
+        if (a.stamps and stages[stage] == "pass"
+                and not os.path.exists(os.path.join(a.stamps, f"{stage}.pass"))):
+            stages[stage] = "stale"
     status = "pass" if all(s == "pass" for s in stages.values()) else "fail"
     errors = [{"stage": s, "message": f"{s}: {v}"} for s, v in stages.items() if v != "pass"]
     return write_report(a.out, "summary", a.design, status, {"stages": stages}, errors, "")
@@ -226,6 +231,7 @@ def build_parser():
 
     s = sub.add_parser("summary")
     s.add_argument("--reports", required=True)
+    s.add_argument("--stamps", help="directory of <stage>.pass stamps; a pass without one is stale")
     s.add_argument("--design", required=True)
     s.add_argument("--out", required=True)
     s.set_defaults(func=cmd_summary)
