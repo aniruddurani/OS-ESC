@@ -95,6 +95,54 @@ class LayoutCommandTest(CliTestBase):
         self.assertEqual(self.report()["status"], "fail")
 
 
+class PexCommandTest(CliTestBase):
+    PRE = {"vm": 0.87, "tphl": 3.0e-11, "tplh": 4.0e-11}
+    SPEC = {"measurements": {
+        "vm": {"min": 0.70, "max": 1.10, "unit": "V"},
+        "tphl": {"max": 1e-10, "unit": "s"},
+        "tplh": {"max": 1e-10, "unit": "s"},
+    }}
+
+    def run_pex(self, log_text, pre=PRE):
+        log = self.write("pex.log", log_text)
+        spec = self.write("spec.json", json.dumps(self.SPEC))
+        if pre is None:
+            sim = self.path("missing_sim.json")
+        else:
+            sim = self.write("sim.json", json.dumps({"status": "pass", "metrics": pre}))
+        return main(["sim", "--stage", "pex", "--log", log, "--spec", spec,
+                     "--compare", sim, "--design", "inv", "--out", self.out])
+
+    def test_slower_post_layout_passes_and_reports_pre_post_delta(self):
+        rc = self.run_pex("vm = 0.86\ntphl = 4.5e-11\ntplh = 5.0e-11\n")
+        self.assertEqual(rc, 0)
+        r = self.report()
+        self.assertEqual(r["status"], "pass")
+        tphl = r["metrics"]["tphl"]
+        self.assertEqual((tphl["pre"], tphl["post"]), (3.0e-11, 4.5e-11))
+        self.assertAlmostEqual(tphl["delta_pct"], 50.0)
+
+    def test_post_layout_out_of_spec_fails(self):
+        self.assertEqual(self.run_pex("vm = 0.86\ntphl = 1.5e-10\ntplh = 5.0e-11\n"), 1)
+        self.assertEqual(self.report()["status"], "fail")
+
+    def test_faster_post_layout_delay_is_error_not_pass(self):
+        # Parasitics only add load; a faster extracted circuit means the
+        # extraction or the deck is wrong, however good the number looks.
+        self.assertEqual(self.run_pex("vm = 0.86\ntphl = 2.0e-11\ntplh = 5.0e-11\n"), 1)
+        r = self.report()
+        self.assertEqual(r["status"], "error")
+        self.assertIn("tphl", r["errors"][0]["message"])
+
+    def test_missing_schematic_report_is_error(self):
+        self.assertEqual(self.run_pex("vm = 0.86\ntphl = 4.5e-11\ntplh = 5.0e-11\n", pre=None), 1)
+        self.assertEqual(self.report()["status"], "error")
+
+    def test_missing_post_measurement_is_error(self):
+        self.assertEqual(self.run_pex("vm = 0.86\ntphl = 4.5e-11\n"), 1)
+        self.assertEqual(self.report()["status"], "error")
+
+
 class DrcCommandTest(CliTestBase):
     CLEAN_MAGIC = "DRC_COUNT 0\nBBOX 0 0 5 5\n"
     CLEAN_LYRDB = "<report-database><items/></report-database>"

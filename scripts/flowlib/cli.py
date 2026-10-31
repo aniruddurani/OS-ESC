@@ -4,6 +4,7 @@ Each subcommand parses tool output, writes the stage report and returns the
 stage's exit code. Usage: python3 -m flowlib.cli <subcommand> [options]
 """
 import argparse
+import json
 import os
 import re
 import sys
@@ -134,7 +135,39 @@ def cmd_sim(a):
                             [{"message": f"simulation log missing: {a.log}"}], a.log)
     measured = parse_ngspice_meas(log_text, names)
     status, errors = check_measurements(measured, spec)
-    return write_report(a.out, a.stage, a.design, status, measured, errors, a.log)
+    metrics = measured
+    if a.compare:
+        status, errors, metrics = _compare_with_schematic(a, spec, measured, status, errors)
+    return write_report(a.out, a.stage, a.design, status, metrics, errors, a.log)
+
+
+# Post-layout delays may be at most this much faster than the schematic's before
+# the result is treated as a broken extraction (numerical noise allowance).
+DELAY_SPEEDUP_TOLERANCE = 0.01
+
+
+def _compare_with_schematic(a, spec, post, status, errors):
+    """Pair each post-layout value with the schematic's, and refuse a faster
+    extracted delay: parasitics only add load."""
+    pre_text = _read(a.compare)
+    if pre_text is None:
+        msg = f"schematic simulation report missing: {a.compare}"
+        return "error", errors + [{"message": msg}], post
+    pre = json.loads(pre_text).get("metrics", {})
+    metrics = {}
+    for name, value in post.items():
+        before = pre.get(name)
+        delta = None
+        if value is not None and before:
+            delta = (value - before) / before * 100.0
+        metrics[name] = {"pre": before, "post": value, "delta_pct": delta}
+        is_delay = spec["measurements"][name].get("unit") == "s"
+        if is_delay and value is not None and before and value < before * (1 - DELAY_SPEEDUP_TOLERANCE):
+            status = "error"
+            errors = errors + [{"measurement": name, "message":
+                f"{name}: post-layout {value:g} s is faster than schematic {before:g} s; "
+                "parasitics cannot speed up a gate, so the extraction or deck is wrong"}]
+    return status, errors, metrics
 
 
 def build_parser():
@@ -184,6 +217,7 @@ def build_parser():
     s.add_argument("--spec", required=True)
     s.add_argument("--design", required=True)
     s.add_argument("--stage", choices=["sim", "pex"], required=True)
+    s.add_argument("--compare", help="schematic sim report to pair post-layout values with")
     s.add_argument("--out", required=True)
     s.set_defaults(func=cmd_sim)
 

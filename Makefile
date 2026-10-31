@@ -54,12 +54,28 @@ CORNER ?= tt
 LAYOUT_SCRIPT ?= designs/$(DESIGN)/layout/$(DESIGN).tcl
 GDS           := $(BUILD)/$(DESIGN).gds
 
-.PHONY: netlist sim layout drc lvs
+.PHONY: netlist sim layout drc lvs pex
 netlist: $(REPORTS)/netlist.json
 sim: $(REPORTS)/sim.json
 layout: $(REPORTS)/layout.json
 drc: $(REPORTS)/drc.json
 lvs: $(REPORTS)/lvs.json
+pex: $(REPORTS)/pex.json
+
+PEX_NETLIST := $(BUILD)/$(DESIGN)_pex.spice
+
+# Post-layout simulation: the same testbench and limits as sim, on the netlist
+# Magic extracts with parasitic capacitance. Only runs on an LVS-clean layout.
+$(REPORTS)/pex.json: $(REPORTS)/lvs.json $(REPORTS)/sim.json $(TB) $(SPEC) scripts/magic_extract_pex.tcl Makefile
+	@mkdir -p $(BUILD)/sim $(LOGS)
+	@rm -f $@ $(PEX_NETLIST) $(BUILD)/sim/post.spice $(LOGS)/pex.log
+	-OUT_DIR=$(BUILD) DESIGN=$(DESIGN) magic -dnull -noconsole -rcfile $(MAGICRC) \
+	  scripts/magic_extract_pex.tcl > $(LOGS)/pex_extract.log 2>&1
+	$(PY) deck --dut $(PEX_NETLIST) --tb $(TB) --lib $(NGSPICE_LIB) \
+	  --corner $(CORNER) --design $(DESIGN) --out $(BUILD)/sim/post.spice
+	-ngspice -b -o $(LOGS)/pex.log $(BUILD)/sim/post.spice
+	$(PY) sim --stage pex --log $(LOGS)/pex.log --spec $(SPEC) \
+	  --compare $(REPORTS)/sim.json --design $(DESIGN) --out $@
 
 EXT_NETLIST := $(BUILD)/$(DESIGN)_ext.spice
 
