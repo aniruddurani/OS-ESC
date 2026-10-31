@@ -1,0 +1,23 @@
+* Inverter testbench: 1.8 V supply, 10 fF load, DC sweep plus one transient period.
+* The device-under-test netlist and model library are included by the generated
+* top-level deck (flowlib.deck), so the same stimuli measure the schematic and
+* the extracted layout.
+.temp 27
+
+Xdut in out vdd vss inv
+Vdd vdd 0 1.8
+Vss vss 0 0
+Vin in 0 PULSE(0 1.8 1n 20p 20p 2n 4n)
+Cl out 0 10f
+
+* Analyses run from a control block: with .dc and .tran cards in one deck,
+* ngspice batch mode aborts the transient ("no data saved").
+.control
+dc Vin 0 1.8 1m
+meas dc vm find v(in) when v(out)=v(in)
+tran 1p 6n
+meas tran voh find v(out) at=0.9n
+meas tran vol find v(out) at=2.9n
+meas tran tphl trig v(in) val=0.9 rise=1 targ v(out) val=0.9 fall=1
+meas tran tplh trig v(in) val=0.9 fall=1 targ v(out) val=0.9 rise=1
+.endc

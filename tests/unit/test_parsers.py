@@ -31,6 +31,19 @@ class NgspiceMeasTest(unittest.TestCase):
         got = parse_ngspice_meas("vm = failed\n", ["vm"])
         self.assertEqual(got, {"vm": None})
 
+    def test_real_ngspice_47_output(self):
+        # Lines copied from a real ngspice-47 run of the inverter testbench.
+        log = (
+            "vm                  =  8.71859e-01\n"
+            "voh                 =  1.80000e+00\n"
+            "vol                 =  4.13775e-07\n"
+            "tphl                =  3.42924e-11 targ=  1.04429e-09 trig=  1.01000e-09\n"
+            "tplh                =  4.45128e-11 targ=  3.07451e-09 trig=  3.03000e-09\n"
+        )
+        got = parse_ngspice_meas(log, ["vm", "voh", "vol", "tphl", "tplh"])
+        self.assertEqual(got, {"vm": 0.871859, "voh": 1.8, "vol": 4.13775e-07,
+                               "tphl": 3.42924e-11, "tplh": 4.45128e-11})
+
     def test_name_must_match_whole_word(self):
         got = parse_ngspice_meas("xvm = 0.5\n", ["vm"])
         self.assertEqual(got, {"vm": None})

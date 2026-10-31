@@ -47,8 +47,22 @@ SCH      := designs/$(DESIGN)/xschem/$(DESIGN).sch
 SYM      := designs/$(DESIGN)/xschem/$(DESIGN).sym
 NETLIST  := $(BUILD)/$(DESIGN).spice
 
-.PHONY: netlist
+TB     := designs/$(DESIGN)/tb/$(DESIGN)_tb.spice
+SPEC   := designs/$(DESIGN)/spec.json
+CORNER ?= tt
+
+.PHONY: netlist sim
 netlist: $(REPORTS)/netlist.json
+sim: $(REPORTS)/sim.json
+
+$(REPORTS)/sim.json: $(REPORTS)/netlist.json $(TB) $(SPEC) Makefile
+	@mkdir -p $(BUILD)/sim $(LOGS)
+	@rm -f $@ $(BUILD)/sim/pre.spice $(LOGS)/sim.log
+	$(PY) deck --dut $(NETLIST) --tb $(TB) --lib $(NGSPICE_LIB) \
+	  --corner $(CORNER) --design $(DESIGN) --out $(BUILD)/sim/pre.spice
+	-ngspice -b -o $(LOGS)/sim.log $(BUILD)/sim/pre.spice
+	$(PY) sim --stage sim --log $(LOGS)/sim.log --spec $(SPEC) \
+	  --design $(DESIGN) --out $@
 
 $(REPORTS)/netlist.json: $(SCH) $(SYM) Makefile
 	@mkdir -p $(REPORTS) $(LOGS)
