@@ -21,7 +21,10 @@ NGSPICE_LIB  := $(PDKPATH)/libs.tech/combined/sky130.lib.spice
 
 PY := PYTHONPATH=scripts python3 -m flowlib.cli
 
-.PHONY: env clean
+.PHONY: env clean test
+
+test:
+	PYTHONPATH=scripts python3 -m unittest discover -s tests/unit -v
 
 env:
 	bash scripts/check_env.sh build/env.json \
