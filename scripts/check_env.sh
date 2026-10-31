@@ -19,9 +19,13 @@ for pair in "$@"; do
   fi
 done
 
-if [ -z "${SPICE_USERINIT_DIR:-}" ] || [ ! -f "$SPICE_USERINIT_DIR/.spiceinit" ]; then
-  missing+=("SPICE_USERINIT_DIR/.spiceinit=${SPICE_USERINIT_DIR:-<unset>}/.spiceinit")
+if [ -z "${SPICE_USERINIT_DIR:-}" ] || [ ! -d "$SPICE_USERINIT_DIR" ]; then
+  missing+=("SPICE_USERINIT_DIR=${SPICE_USERINIT_DIR:-<unset>}")
 fi
+case "${PDKPATH:-}" in
+  */sky130A) ;;
+  *) missing+=("PDKPATH=${PDKPATH:-<unset>} (expected .../sky130A)") ;;
+esac
 
 declare -A versions
 version_of() {

@@ -2,11 +2,17 @@
 # Every stage writes $(REPORTS)/<stage>.json and fails unless status is pass.
 
 DESIGN   ?= inv
-PDK      ?= sky130A
-PDK_ROOT ?= /foss/pdks
-export PDK PDK_ROOT
+# The container's login shell exports a default PDK (ihp-sg13g2), so these use
+# plain `=` to win over the environment. Command-line PDK=... still overrides.
+# The exports below mirror what the image's sak-pdk script sets for a PDK.
+PDK      = sky130A
+PDK_ROOT = /foss/pdks
 
 PDKPATH  := $(PDK_ROOT)/$(PDK)
+export PDK PDK_ROOT PDKPATH
+export SPICE_USERINIT_DIR := $(PDKPATH)/libs.tech/ngspice
+export KLAYOUT_PATH := /headless/.klayout:$(PDKPATH)/libs.tech/klayout
+export STD_CELL_LIBRARY := sky130_fd_sc_hd
 BUILD    ?= build/$(DESIGN)
 REPORTS  := $(BUILD)/reports
 LOGS     := $(BUILD)/logs
