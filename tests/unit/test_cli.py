@@ -170,6 +170,46 @@ class DrcCommandTest(CliTestBase):
         self.assertEqual(self.report()["status"], "error")
 
 
+class LvsCommandTest(CliTestBase):
+    MATCH = ("Subcircuit summary:\nCircuit 1: inv  |Circuit 2: inv\n"
+             "Netlists match uniquely.\nFinal result: Circuits match uniquely.\n")
+
+    def run_lvs(self, report_text):
+        log = self.write("lvs.log", "")
+        if report_text is None:
+            rep = self.path("missing.out")
+        else:
+            rep = self.write("lvs_netgen.out", report_text)
+        return main(["lvs", "--report", rep, "--log", log,
+                     "--design", "inv", "--out", self.out])
+
+    def test_unique_match_passes(self):
+        self.assertEqual(self.run_lvs(self.MATCH), 0)
+        r = self.report()
+        self.assertEqual(r["status"], "pass")
+        self.assertEqual(r["metrics"], {"match": True})
+
+    def test_mismatch_fails_and_lists_the_problem(self):
+        text = "Netlists do not match.\nFinal result: Netlists do not match.\n"
+        self.assertEqual(self.run_lvs(text), 1)
+        r = self.report()
+        self.assertEqual(r["status"], "fail")
+        self.assertEqual(r["metrics"], {"match": False})
+        self.assertIn("Netlists do not match.", r["errors"][0]["message"])
+
+    def test_pin_mismatch_fails_even_with_match_line(self):
+        self.assertEqual(self.run_lvs(self.MATCH + "Top level cell failed pin matching.\n"), 1)
+        self.assertEqual(self.report()["status"], "fail")
+
+    def test_no_final_result_is_error(self):
+        self.assertEqual(self.run_lvs("netgen crashed\n"), 1)
+        self.assertEqual(self.report()["status"], "error")
+
+    def test_missing_report_is_error(self):
+        self.assertEqual(self.run_lvs(None), 1)
+        self.assertEqual(self.report()["status"], "error")
+
+
 class DeckCommandTest(CliTestBase):
     def test_writes_deck(self):
         dut = self.write("inv.spice", ".subckt inv in out vdd vss\n.ends\n")

@@ -13,6 +13,7 @@ from flowlib.parsers import (
     drc_status,
     parse_lyrdb,
     parse_magic_drc,
+    parse_netgen,
     parse_ngspice_meas,
     parse_ports,
     parse_subckt_ports,
@@ -95,6 +96,23 @@ def cmd_drc(a):
     return write_report(a.out, "drc", a.design, status, metrics, errors, a.magic_log)
 
 
+def cmd_lvs(a):
+    text = _read(a.report)
+    if text is None:
+        return write_report(a.out, "lvs", a.design, "error", {"match": None},
+                            [{"message": f"Netgen report missing: {a.report}"}], a.log)
+    result = parse_netgen(text)
+    if result["match"] is None:
+        status, errors = "error", [{"message": "no 'Final result' line in the Netgen report"}]
+    elif result["match"]:
+        status, errors = "pass", []
+    else:
+        status = "fail"
+        errors = [{"message": m} for m in result["errors"]] or [
+            {"message": "Netgen did not report a unique match"}]
+    return write_report(a.out, "lvs", a.design, status, {"match": result["match"]}, errors, a.log)
+
+
 def cmd_deck(a):
     try:
         deck = make_deck(a.dut, a.tb, a.lib, a.corner, a.design)
@@ -144,6 +162,13 @@ def build_parser():
     s.add_argument("--design", required=True)
     s.add_argument("--out", required=True)
     s.set_defaults(func=cmd_drc)
+
+    s = sub.add_parser("lvs")
+    s.add_argument("--report", required=True)
+    s.add_argument("--log", required=True)
+    s.add_argument("--design", required=True)
+    s.add_argument("--out", required=True)
+    s.set_defaults(func=cmd_lvs)
 
     s = sub.add_parser("deck")
     s.add_argument("--dut", required=True)

@@ -54,11 +54,25 @@ CORNER ?= tt
 LAYOUT_SCRIPT ?= designs/$(DESIGN)/layout/$(DESIGN).tcl
 GDS           := $(BUILD)/$(DESIGN).gds
 
-.PHONY: netlist sim layout drc
+.PHONY: netlist sim layout drc lvs
 netlist: $(REPORTS)/netlist.json
 sim: $(REPORTS)/sim.json
 layout: $(REPORTS)/layout.json
 drc: $(REPORTS)/drc.json
+lvs: $(REPORTS)/lvs.json
+
+EXT_NETLIST := $(BUILD)/$(DESIGN)_ext.spice
+
+# Layout (extracted by Magic) versus the schematic netlist, compared by Netgen.
+$(REPORTS)/lvs.json: $(REPORTS)/drc.json $(REPORTS)/netlist.json scripts/magic_extract_lvs.tcl Makefile
+	@mkdir -p $(REPORTS) $(LOGS)
+	@rm -f $@ $(EXT_NETLIST) $(BUILD)/*.ext $(BUILD)/lvs_netgen.out
+	-OUT_DIR=$(BUILD) DESIGN=$(DESIGN) magic -dnull -noconsole -rcfile $(MAGICRC) \
+	  scripts/magic_extract_lvs.tcl > $(LOGS)/lvs_extract.log 2>&1
+	-netgen -batch lvs "$(EXT_NETLIST) $(DESIGN)" "$(NETLIST) $(DESIGN)" \
+	  $(NETGEN_SETUP) $(BUILD)/lvs_netgen.out > $(LOGS)/lvs.log 2>&1
+	$(PY) lvs --report $(BUILD)/lvs_netgen.out --log $(LOGS)/lvs.log \
+	  --design $(DESIGN) --out $@
 
 # Two independent DRC engines must both be clean: Magic (full rule style) and
 # the PDK's KLayout deck.
