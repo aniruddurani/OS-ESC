@@ -5,10 +5,18 @@ stage's exit code. Usage: python3 -m flowlib.cli <subcommand> [options]
 """
 import argparse
 import os
+import re
 import sys
 
 from flowlib.deck import PORT_ORDER, make_deck
-from flowlib.parsers import parse_ngspice_meas, parse_ports, parse_subckt_ports
+from flowlib.parsers import (
+    drc_status,
+    parse_lyrdb,
+    parse_magic_drc,
+    parse_ngspice_meas,
+    parse_ports,
+    parse_subckt_ports,
+)
 from flowlib.report import write_report
 from flowlib.spec import check_measurements, load_spec
 
@@ -57,6 +65,36 @@ def cmd_layout(a):
     return write_report(a.out, "layout", a.design, status, {"ports": ports}, errors, a.log)
 
 
+def cmd_drc(a):
+    magic = parse_magic_drc(_read(a.magic_log) or "")
+    lyrdb = _read(a.klayout_report)
+    klayout = parse_lyrdb(lyrdb) if lyrdb is not None else None
+    status = drc_status(magic["count"], magic["bbox"], klayout)
+    errors = [{"tool": "magic", "rule": v["rule"], "where": list(v["box"])}
+              for v in magic["violations"]]
+    errors += [{"tool": "klayout", "rule": v["rule"], "where": v["where"]}
+               for v in klayout or []]
+    if status == "error":
+        if magic["count"] is None or magic["bbox"] is None:
+            errors.append({"message": "Magic DRC output has no DRC_COUNT/BBOX lines"})
+        elif (magic["bbox"][2] - magic["bbox"][0]) * (magic["bbox"][3] - magic["bbox"][1]) <= 0:
+            errors.append({"message": "layout is empty (zero-area bounding box)"})
+        if klayout is None:
+            errors.append({"message": f"KLayout report missing or unreadable: {a.klayout_report}"})
+    if a.klayout_log is not None:
+        # The sky130A deck runs no front/back-end rules unless feol and beol are
+        # set, and then reports a clean database; require proof they were on.
+        klog = _read(a.klayout_log) or ""
+        off = [g for g in ("feol", "beol")
+               if not re.search(rf"\b{g}:\s*(true|1)\b", klog)]
+        if off:
+            status = "error"
+            errors.append({"message": "KLayout rule groups not enabled: " + ", ".join(off)})
+    metrics = {"magic_violations": magic["count"],
+               "klayout_violations": None if klayout is None else len(klayout)}
+    return write_report(a.out, "drc", a.design, status, metrics, errors, a.magic_log)
+
+
 def cmd_deck(a):
     try:
         deck = make_deck(a.dut, a.tb, a.lib, a.corner, a.design)
@@ -98,6 +136,14 @@ def build_parser():
     s.add_argument("--design", required=True)
     s.add_argument("--out", required=True)
     s.set_defaults(func=cmd_layout)
+
+    s = sub.add_parser("drc")
+    s.add_argument("--magic-log", required=True)
+    s.add_argument("--klayout-report", required=True)
+    s.add_argument("--klayout-log")
+    s.add_argument("--design", required=True)
+    s.add_argument("--out", required=True)
+    s.set_defaults(func=cmd_drc)
 
     s = sub.add_parser("deck")
     s.add_argument("--dut", required=True)

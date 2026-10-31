@@ -95,6 +95,81 @@ class LayoutCommandTest(CliTestBase):
         self.assertEqual(self.report()["status"], "fail")
 
 
+class DrcCommandTest(CliTestBase):
+    CLEAN_MAGIC = "DRC_COUNT 0\nBBOX 0 0 5 5\n"
+    CLEAN_LYRDB = "<report-database><items/></report-database>"
+    ONE_LYRDB = ("<report-database><items><item><category>'m1.2'</category>"
+                 "<values><value>edge-pair: (0,0;1,0)/(0,0.1;1,0.1)</value></values>"
+                 "</item></items></report-database>")
+
+    def run_drc(self, magic_log, lyrdb):
+        m = self.write("drc_magic.log", magic_log)
+        args = ["drc", "--magic-log", m, "--design", "inv", "--out", self.out]
+        if lyrdb is not None:
+            args += ["--klayout-report", self.write("drc.lyrdb", lyrdb)]
+        else:
+            args += ["--klayout-report", self.path("missing.lyrdb")]
+        return main(args)
+
+    def test_both_clean_passes(self):
+        self.assertEqual(self.run_drc(self.CLEAN_MAGIC, self.CLEAN_LYRDB), 0)
+        r = self.report()
+        self.assertEqual(r["status"], "pass")
+        self.assertEqual(r["metrics"], {"magic_violations": 0, "klayout_violations": 0})
+
+    def test_magic_violation_fails_with_rule_and_location(self):
+        log = "DRC_COUNT 1\nBBOX 0 0 5 5\nDRC_ERR 1.0 2.0 1.5 2.5 Metal1 spacing < 0.14um\n"
+        self.assertEqual(self.run_drc(log, self.CLEAN_LYRDB), 1)
+        r = self.report()
+        self.assertEqual(r["status"], "fail")
+        self.assertEqual(r["metrics"]["magic_violations"], 1)
+        self.assertEqual(r["errors"], [{
+            "tool": "magic", "rule": "Metal1 spacing < 0.14um", "where": [1.0, 2.0, 1.5, 2.5]}])
+
+    def test_klayout_violation_fails(self):
+        self.assertEqual(self.run_drc(self.CLEAN_MAGIC, self.ONE_LYRDB), 1)
+        r = self.report()
+        self.assertEqual(r["status"], "fail")
+        self.assertEqual(r["metrics"]["klayout_violations"], 1)
+        self.assertEqual(r["errors"][0]["tool"], "klayout")
+        self.assertEqual(r["errors"][0]["rule"], "m1.2")
+
+    def test_empty_layout_is_error_not_pass(self):
+        self.assertEqual(self.run_drc("DRC_COUNT 0\nBBOX 0 0 0 0\n", self.CLEAN_LYRDB), 1)
+        self.assertEqual(self.report()["status"], "error")
+
+    def test_missing_klayout_report_is_error(self):
+        self.assertEqual(self.run_drc(self.CLEAN_MAGIC, None), 1)
+        self.assertEqual(self.report()["status"], "error")
+
+    def test_magic_crash_is_error(self):
+        self.assertEqual(self.run_drc("magic crashed\n", self.CLEAN_LYRDB), 1)
+        self.assertEqual(self.report()["status"], "error")
+
+    def run_drc_with_klayout_log(self, klayout_log):
+        m = self.write("drc_magic.log", self.CLEAN_MAGIC)
+        r = self.write("drc.lyrdb", self.CLEAN_LYRDB)
+        k = self.write("drc_klayout.log", klayout_log)
+        return main(["drc", "--magic-log", m, "--klayout-report", r,
+                     "--klayout-log", k, "--design", "inv", "--out", self.out])
+
+    def test_klayout_rule_groups_enabled_passes(self):
+        # The sky130A deck runs no front/back-end rules unless asked to.
+        log = "Args:\n\tfeol: true\n\tbeol: true\n\toffgrid: true\n"
+        self.assertEqual(self.run_drc_with_klayout_log(log), 0)
+
+    def test_klayout_rule_groups_disabled_is_error_not_pass(self):
+        log = "Args:\n\tfeol: false\n\tbeol: false\n\toffgrid: false\n"
+        self.assertEqual(self.run_drc_with_klayout_log(log), 1)
+        r = self.report()
+        self.assertEqual(r["status"], "error")
+        self.assertIn("feol", r["errors"][-1]["message"])
+
+    def test_klayout_log_missing_args_is_error(self):
+        self.assertEqual(self.run_drc_with_klayout_log("KLayout crashed\n"), 1)
+        self.assertEqual(self.report()["status"], "error")
+
+
 class DeckCommandTest(CliTestBase):
     def test_writes_deck(self):
         dut = self.write("inv.spice", ".subckt inv in out vdd vss\n.ends\n")

@@ -20,8 +20,12 @@ load inv
 
 # Device generator options: metal1 on source/drain/gate contacts and on the
 # guard ring's right side (viagr), which is where the supply ties land.
-set dev "nf 1 guard 1 diffcov 100 polycov 100 topc 1 botc 1 poverlap 0 \
+set dev "nf 1 guard 1 diffcov 100 polycov 100 poverlap 0 \
          doports 1 full_metal 1 viasrc 100 viadrn 100 viagate 100 viagr 100"
+# Gate contact only on the side facing the other device (topc / botc); an
+# unused gate pad is an isolated piece of metal1 that fails the minimum-area rule.
+set dev_n "$dev topc 1 botc 0"
+set dev_p "$dev topc 0 botc 1"
 
 proc new_device {gencell inst w l opts} {
     set before [cellname list allcells]
@@ -46,8 +50,25 @@ proc metal1 {x1 y1 x2 y2} {
 # gencell drops an instance of the new device into whatever cell is being
 # edited, so generate in a scratch cell and keep it out of the layout.
 load scratch
-set nfet [new_device sky130::sky130_fd_pr__nfet_01v8 xn $W_N $L $dev]
-set pfet [new_device sky130::sky130_fd_pr__pfet_01v8 xp $W_P $L $dev]
+set nfet [new_device sky130::sky130_fd_pr__nfet_01v8 xn $W_N $L $dev_n]
+set pfet [new_device sky130::sky130_fd_pr__pfet_01v8 xp $W_P $L $dev_p]
+# Gate pad centres, read from each device's G port so the gate bar still lands
+# on the pads if the generator changes the device outline. findlabel does not
+# work on cells that are not saved, so read the label out of the saved .mag
+# (rlabel <layer> x1 y1 x2 y2 <pos> G; units are 5 nm).
+writeall force
+proc gate_y {cell} {
+    set f [open $cell.mag]
+    set text [read $f]
+    close $f
+    if {![regexp {rlabel \S+ (-?\d+) (-?\d+) (-?\d+) (-?\d+) \d+ G\n} $text -> x1 y1 x2 y2]} {
+        error "no G label in $cell.mag"
+    }
+    return [expr {($y1 + $y2) / 2.0 * 0.005}]
+}
+set gate_n [gate_y $nfet]
+set gate_p [expr {$YP + [gate_y $pfet]}]
+
 load inv
 place $nfet 0 0
 place $pfet 0 $YP
@@ -55,21 +76,22 @@ place $pfet 0 $YP
 # Source-to-guard-ring ties (nfet: vss, pfet: vdd).
 metal1 0.105 -0.08 0.705 0.08
 metal1 0.105 [expr {$YP - 0.08}] 0.705 [expr {$YP + 0.08}]
-# Repaint the top edge of each guard ring's metal1 in this cell (it merges with
-# the identical metal inside the device), so the supply labels sit on metal1.
-metal1 0.675 1.2 0.905 1.26
-metal1 0.675 [expr {$YP + 1.745}] 0.905 [expr {$YP + 1.805}]
+# Supply pads: each overlaps the right side of its device's guard-ring metal1
+# (x 0.875..0.905). The labels need metal1 painted in this cell, and every shape
+# painted here must meet the minimum area on its own: 0.425 x 0.22 = 0.094 um^2.
+metal1 0.875 -0.11 1.3 0.11
+metal1 0.875 [expr {$YP - 0.11}] 1.3 [expr {$YP + 0.11}]
 # Drains: out. Gates: in.
 metal1 -0.475 0.0 -0.305 $YP
-metal1 -0.07 0.8 0.07 [expr {$YP - 1.3}]
+metal1 -0.07 $gate_n 0.07 $gate_p
 
 # Ports, numbered in the flow's pin order: in out vdd vss.
-# The guard ring's metal1 is an outline; its top edge is the solid piece to label.
+# vdd / vss labels sit on the supply pads above.
 set ports [list \
     {in  1 0.0   2.0} \
     {out 2 -0.39 2.0} \
-    [list vdd 3 0.89 [expr {$YP + 1.775}]] \
-    {vss 4 0.89  1.23} ]
+    [list vdd 3 1.0 $YP] \
+    {vss 4 1.0 0.0} ]
 foreach p $ports {
     lassign $p name idx x y
     box $x $y $x $y

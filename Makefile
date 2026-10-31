@@ -54,10 +54,29 @@ CORNER ?= tt
 LAYOUT_SCRIPT ?= designs/$(DESIGN)/layout/$(DESIGN).tcl
 GDS           := $(BUILD)/$(DESIGN).gds
 
-.PHONY: netlist sim layout
+.PHONY: netlist sim layout drc
 netlist: $(REPORTS)/netlist.json
 sim: $(REPORTS)/sim.json
 layout: $(REPORTS)/layout.json
+drc: $(REPORTS)/drc.json
+
+# Two independent DRC engines must both be clean: Magic (full rule style) and
+# the PDK's KLayout deck.
+$(REPORTS)/drc.json: $(REPORTS)/layout.json scripts/magic_drc.tcl Makefile
+	@mkdir -p $(REPORTS) $(LOGS)
+	@rm -f $@ $(BUILD)/drc_klayout.lyrdb $(LOGS)/drc_magic.log $(LOGS)/drc_klayout.log
+	-OUT_DIR=$(BUILD) DESIGN=$(DESIGN) magic -dnull -noconsole -rcfile $(MAGICRC) \
+	  scripts/magic_drc.tcl > $(LOGS)/drc_magic.log 2>&1
+	@# The deck prefixes the input's directory onto a relative report path, so
+	@# both paths are absolute. It runs no front/back-end rules unless
+	@# feol/beol are set (drc checks the log for them).
+	-klayout -b -r $(KLAYOUT_DRC) -rd input=$(CURDIR)/$(GDS) \
+	  -rd report=$(CURDIR)/$(BUILD)/drc_klayout.lyrdb -rd top_cell=$(DESIGN) \
+	  -rd feol=true -rd beol=true -rd offgrid=true \
+	  > $(LOGS)/drc_klayout.log 2>&1
+	$(PY) drc --magic-log $(LOGS)/drc_magic.log \
+	  --klayout-report $(BUILD)/drc_klayout.lyrdb --klayout-log $(LOGS)/drc_klayout.log \
+	  --design $(DESIGN) --out $@
 
 $(REPORTS)/layout.json: $(LAYOUT_SCRIPT) Makefile
 	@mkdir -p $(REPORTS) $(LOGS)
