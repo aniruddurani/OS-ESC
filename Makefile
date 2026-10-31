@@ -39,3 +39,25 @@ env:
 
 clean:
 	rm -rf $(BUILD)
+
+# Each report rule removes its own outputs first, so a failed tool run can
+# never leave an old pass behind, and runs the CLI even if the tool failed
+# (leading '-') so the failure is recorded as a report.
+SCH      := designs/$(DESIGN)/xschem/$(DESIGN).sch
+SYM      := designs/$(DESIGN)/xschem/$(DESIGN).sym
+NETLIST  := $(BUILD)/$(DESIGN).spice
+
+.PHONY: netlist
+netlist: $(REPORTS)/netlist.json
+
+$(REPORTS)/netlist.json: $(SCH) $(SYM) Makefile
+	@mkdir -p $(REPORTS) $(LOGS)
+	@rm -f $@ $(NETLIST)
+	-xschem --rcfile $(XSCHEMRC) -n -s -q -x \
+	  -o $(BUILD) -N $(DESIGN).spice $(SCH) > $(LOGS)/netlist.log 2>&1
+	@# xschem writes a top-level schematic's header as '**.subckt' and footer
+	@# as '**.ends' (comments); setting top_is_subckt makes it drop the devices.
+	@# A bare '.end' would stop ngspice reading when this file is .included.
+	-sed -i -e 's/^\*\*\.subckt /.subckt /' -e 's/^\*\*\.ends/.ends/' -e '/^\.end$$/d' $(NETLIST)
+	$(PY) netlist --netlist $(NETLIST) --log $(LOGS)/netlist.log \
+	  --design $(DESIGN) --out $@
