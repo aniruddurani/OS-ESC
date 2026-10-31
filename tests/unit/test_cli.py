@@ -95,6 +95,51 @@ class LayoutCommandTest(CliTestBase):
         self.assertEqual(self.report()["status"], "fail")
 
 
+class SummaryCommandTest(CliTestBase):
+    STAGES = ["netlist", "sim", "layout", "drc", "lvs", "pex"]
+
+    def write_reports(self, statuses):
+        for stage, status in statuses.items():
+            self.write(os.path.join("reports", f"{stage}.json"),
+                       json.dumps({"stage": stage, "status": status}))
+
+    def run_summary(self):
+        return main(["summary", "--reports", self.path("reports"),
+                     "--design", "inv", "--out", self.out])
+
+    def setUp(self):
+        super().setUp()
+        os.makedirs(self.path("reports"), exist_ok=True)
+
+    def test_all_stages_pass(self):
+        self.write_reports({s: "pass" for s in self.STAGES})
+        self.assertEqual(self.run_summary(), 0)
+        r = self.report()
+        self.assertEqual(r["status"], "pass")
+        self.assertEqual(r["metrics"]["stages"], {s: "pass" for s in self.STAGES})
+
+    def test_one_failing_stage_fails_the_summary(self):
+        self.write_reports({**{s: "pass" for s in self.STAGES}, "lvs": "fail"})
+        self.assertEqual(self.run_summary(), 1)
+        r = self.report()
+        self.assertEqual(r["status"], "fail")
+        self.assertEqual(r["metrics"]["stages"]["lvs"], "fail")
+
+    def test_stage_that_never_ran_is_missing_not_pass(self):
+        # A stale or absent report must never read as a pass (Review Focus 4).
+        self.write_reports({s: "pass" for s in self.STAGES if s != "pex"})
+        self.assertEqual(self.run_summary(), 1)
+        r = self.report()
+        self.assertEqual(r["status"], "fail")
+        self.assertEqual(r["metrics"]["stages"]["pex"], "missing")
+
+    def test_unreadable_report_is_error(self):
+        self.write_reports({s: "pass" for s in self.STAGES})
+        self.write(os.path.join("reports", "drc.json"), "{not json")
+        self.assertEqual(self.run_summary(), 1)
+        self.assertEqual(self.report()["metrics"]["stages"]["drc"], "error")
+
+
 class PexCommandTest(CliTestBase):
     PRE = {"vm": 0.87, "tphl": 3.0e-11, "tplh": 4.0e-11}
     SPEC = {"measurements": {

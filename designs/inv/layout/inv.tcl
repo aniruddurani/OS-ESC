@@ -85,6 +85,12 @@ metal1 0.875 [expr {$YP - 0.11}] 1.3 [expr {$YP + 0.11}]
 metal1 -0.475 0.0 -0.305 $YP
 metal1 -0.07 $gate_n 0.07 $gate_p
 
+# Fault injection for `make selftest`: the scripts in tests/fixtures set
+# post_wire_hook, then source this file, to build a deliberately broken layout.
+if {[info exists ::post_wire_hook]} {
+    eval $::post_wire_hook
+}
+
 # Ports, numbered in the flow's pin order: in out vdd vss.
 # vdd / vss labels sit on the supply pads above.
 set ports [list \

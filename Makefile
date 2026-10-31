@@ -62,6 +62,24 @@ drc: $(REPORTS)/drc.json
 lvs: $(REPORTS)/lvs.json
 pex: $(REPORTS)/pex.json
 
+.PHONY: all png selftest
+
+# Every stage in order, stopping at the first failure. The summary is always
+# rebuilt from the reports that exist now, so it can never show an old pass.
+all:
+	@rm -f $(REPORTS)/summary.json
+	@$(MAKE) --no-print-directory netlist sim layout drc lvs pex; rc=$$?; \
+	  $(PY) summary --reports $(REPORTS) --design $(DESIGN) --out $(REPORTS)/summary.json; \
+	  exit $$rc
+
+# A picture of the layout for people to look at. Not a gate.
+png: $(REPORTS)/layout.json
+	GDS=$(GDS) LYP=$(KLAYOUT_LYP) OUT=$(BUILD)/$(DESIGN).png \
+	  klayout -b -r scripts/render_png.py > $(LOGS)/png.log 2>&1
+
+selftest:
+	bash scripts/selftest.sh
+
 PEX_NETLIST := $(BUILD)/$(DESIGN)_pex.spice
 
 # Post-layout simulation: the same testbench and limits as sim, on the netlist
