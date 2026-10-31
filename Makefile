@@ -51,9 +51,22 @@ TB     := designs/$(DESIGN)/tb/$(DESIGN)_tb.spice
 SPEC   := designs/$(DESIGN)/spec.json
 CORNER ?= tt
 
-.PHONY: netlist sim
+LAYOUT_SCRIPT ?= designs/$(DESIGN)/layout/$(DESIGN).tcl
+GDS           := $(BUILD)/$(DESIGN).gds
+
+.PHONY: netlist sim layout
 netlist: $(REPORTS)/netlist.json
 sim: $(REPORTS)/sim.json
+layout: $(REPORTS)/layout.json
+
+$(REPORTS)/layout.json: $(LAYOUT_SCRIPT) Makefile
+	@mkdir -p $(REPORTS) $(LOGS)
+	@# The generator also saves its device cells here; stale ones make gencell
+	@# stop and ask a question, so clear every .mag, not only the top cell.
+	@rm -f $@ $(GDS) $(BUILD)/*.mag
+	-OUT_DIR=$(BUILD) magic -dnull -noconsole -rcfile $(MAGICRC) $(LAYOUT_SCRIPT) \
+	  > $(LOGS)/layout.log 2>&1
+	$(PY) layout --gds $(GDS) --log $(LOGS)/layout.log --design $(DESIGN) --out $@
 
 $(REPORTS)/sim.json: $(REPORTS)/netlist.json $(TB) $(SPEC) Makefile
 	@mkdir -p $(BUILD)/sim $(LOGS)

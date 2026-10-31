@@ -59,6 +59,42 @@ class NetlistCommandTest(CliTestBase):
         self.assertEqual(self.report()["status"], "error")
 
 
+class LayoutCommandTest(CliTestBase):
+    GOOD_LOG = "PORT 1 in\nPORT 2 out\nPORT 3 vdd\nPORT 4 vss\n"
+
+    def run_layout(self, gds_bytes, log_text):
+        gds = self.path("inv.gds")
+        if gds_bytes is not None:
+            with open(gds, "wb") as f:
+                f.write(gds_bytes)
+        log = self.write("layout.log", log_text)
+        return main(["layout", "--gds", gds, "--log", log,
+                     "--design", "inv", "--out", self.out])
+
+    def test_gds_and_ports_pass(self):
+        self.assertEqual(self.run_layout(b"\x00\x06\x00\x02\x00\x07", self.GOOD_LOG), 0)
+        self.assertEqual(self.report()["status"], "pass")
+
+    def test_missing_gds_is_error(self):
+        self.assertEqual(self.run_layout(None, self.GOOD_LOG), 1)
+        self.assertEqual(self.report()["status"], "error")
+
+    def test_empty_gds_is_error(self):
+        self.assertEqual(self.run_layout(b"", self.GOOD_LOG), 1)
+        self.assertEqual(self.report()["status"], "error")
+
+    def test_missing_port_fails(self):
+        self.assertEqual(self.run_layout(b"gds", "PORT 1 in\nPORT 2 out\nPORT 3 vdd\n"), 1)
+        r = self.report()
+        self.assertEqual(r["status"], "fail")
+        self.assertIn("vss", r["errors"][0]["message"])
+
+    def test_wrong_port_order_fails(self):
+        log = "PORT 1 out\nPORT 2 in\nPORT 3 vdd\nPORT 4 vss\n"
+        self.assertEqual(self.run_layout(b"gds", log), 1)
+        self.assertEqual(self.report()["status"], "fail")
+
+
 class DeckCommandTest(CliTestBase):
     def test_writes_deck(self):
         dut = self.write("inv.spice", ".subckt inv in out vdd vss\n.ends\n")

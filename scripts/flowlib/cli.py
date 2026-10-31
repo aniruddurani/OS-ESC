@@ -8,7 +8,7 @@ import os
 import sys
 
 from flowlib.deck import PORT_ORDER, make_deck
-from flowlib.parsers import parse_ngspice_meas, parse_subckt_ports
+from flowlib.parsers import parse_ngspice_meas, parse_ports, parse_subckt_ports
 from flowlib.report import write_report
 from flowlib.spec import check_measurements, load_spec
 
@@ -38,6 +38,23 @@ def cmd_netlist(a):
             status = "fail"
             errors.append({"message": f".subckt {a.design} ports are {ports}, expected {PORT_ORDER}"})
     return write_report(a.out, "netlist", a.design, status, {}, errors, a.log)
+
+
+def cmd_layout(a):
+    log_text = _read(a.log) or ""
+    ports = parse_ports(log_text)
+    errors = []
+    if not os.path.exists(a.gds) or os.path.getsize(a.gds) == 0:
+        status = "error"
+        errors.append({"message": f"GDS not written or empty: {a.gds}"})
+    elif ports != PORT_ORDER:
+        status = "fail"
+        missing = [p for p in PORT_ORDER if p not in ports]
+        detail = f"missing {missing}" if missing else "wrong order"
+        errors.append({"message": f"ports are {ports}, expected {PORT_ORDER} ({detail})"})
+    else:
+        status = "pass"
+    return write_report(a.out, "layout", a.design, status, {"ports": ports}, errors, a.log)
 
 
 def cmd_deck(a):
@@ -74,6 +91,13 @@ def build_parser():
     s.add_argument("--design", required=True)
     s.add_argument("--out", required=True)
     s.set_defaults(func=cmd_netlist)
+
+    s = sub.add_parser("layout")
+    s.add_argument("--gds", required=True)
+    s.add_argument("--log", required=True)
+    s.add_argument("--design", required=True)
+    s.add_argument("--out", required=True)
+    s.set_defaults(func=cmd_layout)
 
     s = sub.add_parser("deck")
     s.add_argument("--dut", required=True)
