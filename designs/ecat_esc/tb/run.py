@@ -22,6 +22,8 @@ TESTS = {
     "test_mii_rx": "mii_rx",
     "test_mii_loop": "mii_loop",
     "test_cdc": "async_fifo",
+    "test_parse": "frame_parse",
+    "test_delay": "delay_line",
 }
 
 
