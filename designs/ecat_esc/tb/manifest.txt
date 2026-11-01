@@ -75,3 +75,6 @@ test_sram_model_random
 test_sram_pdk_random
 test_physical_first_byte_margin_6
 test_physical_first_byte_margin_7
+test_fmmu_plan_matches_reference
+test_fmmu_plan_edges
+test_fmmu_plan_holds_until_next_plan
