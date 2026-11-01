@@ -90,12 +90,23 @@ module dgram_exec #(
     reg        pf_go;
     reg [15:0] pf_addr;
 
-    // does [ado, ado + len) fit the registers or the RAM?
-    wire [16:0] a_end   = {1'b0, ado} + {6'd0, dg_len};
-    wire        reg_ok  = (a_end <= 17'h01000);
-    wire [16:0] ram_end = a_end - 17'h01000;
-    wire        ram_ok  = (ado >= 16'h1000) && ({15'd0, ram_end} <= RAM_LIM);
-    wire        fits    = reg_ok || ram_ok;
+    // Does [ado, ado + len) fit the registers or the RAM? Worked out in three registered
+    // stages from ado and dg_len (both held for the whole datagram), one adder or compare
+    // each: fits_r is valid three clocks after dg_len_done, and len_d[2] pulses then.
+    reg [16:0] a_end_r, ram_end_r;
+    reg        reg_ok_r, ram_lo_r, fits_r;
+    reg [2:0]  len_d;
+    always @(posedge clk) begin
+        a_end_r   <= {1'b0, ado} + {6'd0, dg_len};
+        reg_ok_r  <= (a_end_r <= 17'h01000);
+        ram_end_r <= a_end_r - 17'h01000;
+        ram_lo_r  <= (ado >= 16'h1000);
+        fits_r    <= reg_ok_r || (ram_lo_r && ({15'd0, ram_end_r} <= RAM_LIM));
+        len_d     <= {len_d[1:0], dg_len_done && !rst};
+    end
+
+    reg [15:0] wctr;            // physical commands: address of the data byte now passing
+    reg [15:0] rctr;            // physical commands: address of the next byte to prefetch
 
     reg        lg_go;           // logical: prefetch byte 0 one clock after hdr_done
     reg        rd_seen, wr_seen;
@@ -107,9 +118,9 @@ module dgram_exec #(
     // this byte / the next byte: does it read or write, and where
     wire        rd_hit_i = cmd_l ? fm_q0_rd_hit : (ok && is_rd);
     wire        wr_hit_i = cmd_l ? fm_q0_wr_hit : (ok && is_wr);
-    wire [15:0] wr_addr_i = cmd_l ? fm_q0_wr_addr : (ado + {5'd0, p_pos});
+    wire [15:0] wr_addr_i = cmd_l ? fm_q0_wr_addr : wctr;
     wire        rd_hit_n = cmd_l ? fm_q1_rd_hit : (ok && is_rd);
-    wire [15:0] rd_addr_n = cmd_l ? fm_q1_rd_addr : (ado + {5'd0, next_off});
+    wire [15:0] rd_addr_n = cmd_l ? fm_q1_rd_addr : rctr;
 
     assign fm_calc   = dg_len_done && cmd_l;
     assign fm_q0_off = p_pos;
@@ -134,6 +145,8 @@ module dgram_exec #(
             addressed <= 1'b0;
             ok        <= 1'b0;
             ado       <= 16'd0;
+            wctr      <= 16'd0;
+            rctr      <= 16'd0;
             carry     <= 1'b0;
             rd_seen   <= 1'b0;
             wr_seen   <= 1'b0;
@@ -162,14 +175,16 @@ module dgram_exec #(
                 addressed <= (cmd_ap && dg_addr[15:0] == 16'd0) ||
                              (cmd_fp && dg_addr[15:0] == station_addr) || cmd_b;
             end
-            if (dg_len_done) begin                 // length known: start the first read early
-                if (cmd_l && dg_len != 11'd0) lg_go <= 1'b1;
-                if (addressed && fits && is_rd && dg_len != 11'd0) begin
-                    pf_go   <= 1'b1;
-                    pf_addr <= ado;
-                end
+            if (dg_len_done && cmd_l && dg_len != 11'd0) lg_go <= 1'b1;
+            if (len_d[2] && addressed && fits_r && is_rd && dg_len != 11'd0) begin
+                pf_go   <= 1'b1;                   // physical: start the first read early
+                pf_addr <= ado;
+                rctr    <= ado + 16'd1;
             end
-            if (dg_hdr_done) ok <= addressed && fits;
+            if (dg_hdr_done) begin
+                ok   <= addressed && fits_r;
+                wctr <= ado;
+            end
             if (p_valid) begin
                 o_valid <= 1'b1;
                 o_first <= p_first;
@@ -195,9 +210,11 @@ module dgram_exec #(
                             mem_wdata <= p_data;
                             wr_seen   <= 1'b1;
                         end
+                        wctr <= wctr + 16'd1;
                         if (rd_hit_n && (next_off < dg_len)) begin
                             pf_go   <= 1'b1;
                             pf_addr <= rd_addr_n;
+                            rctr    <= rctr + 16'd1;
                         end
                     end
                     K_WKC: if (p_pos == 11'd0) begin

@@ -73,3 +73,5 @@ test_macro_bank_boundary
 test_macro_out_of_range
 test_sram_model_random
 test_sram_pdk_random
+test_physical_first_byte_margin_6
+test_physical_first_byte_margin_7

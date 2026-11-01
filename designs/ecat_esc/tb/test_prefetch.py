@@ -37,3 +37,27 @@ async def test_first_byte_prefetch_margin_7(dut):
 @cocotb.test()
 async def test_first_byte_prefetch_margin_8(dut):
     await run_reads(dut, 33, 8)
+
+
+async def run_physical(dut, seed, period):
+    drv, mon, rng, model = await start(dut, seed)
+    drv.gap = (period, period)
+    top = 0x1000 + 256                                                              # RAM_BYTES = 256
+    await exchange(drv, mon, model, one("APWR", adp_ado(0, top - 16), bytes(range(0x61, 0x71))))
+    await exchange(drv, mon, model, one("APRD", adp_ado(0, top - 16), bytes(16)))   # last byte of RAM
+    await exchange(drv, mon, model, one("APRD", adp_ado(0, top - 1), bytes(1)))     # one byte
+    await exchange(drv, mon, model, one("APRD", adp_ado(0, top - 8), bytes(16)))    # runs past the RAM: no access
+    await exchange(drv, mon, model, one("APRD", adp_ado(0, 0x1000), bytes(64)))
+    await exchange(drv, mon, model, one("APRW", adp_ado(0, 0x1000), bytes(range(64))))
+    await exchange(drv, mon, model, one("BRD", adp_ado(0, 0x1000), bytes(32)))
+    await exchange(drv, mon, model, one("FPRD", 0x00000000, bytes(24)))
+
+
+@cocotb.test()
+async def test_physical_first_byte_margin_6(dut):
+    await run_physical(dut, 41, 6)
+
+
+@cocotb.test()
+async def test_physical_first_byte_margin_7(dut):
+    await run_physical(dut, 42, 7)
