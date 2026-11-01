@@ -142,9 +142,11 @@ class SlaveModel:
     def _writable(self, buf, offset):
         if buf is self.ram:
             return True
-        return (0x0010 <= offset < 0x0012
-                or FMMU_BASE <= offset < FMMU_BASE + FMMU_SIZE * self.n_fmmu
-                or SM_BASE <= offset < SM_BASE + SM_SIZE * self.n_sm)
+        if FMMU_BASE <= offset < FMMU_BASE + FMMU_SIZE * self.n_fmmu:
+            return (offset - FMMU_BASE) % FMMU_SIZE <= 12        # bytes 13..15 reserved
+        if SM_BASE <= offset < SM_BASE + SM_SIZE * self.n_sm:
+            return (offset - SM_BASE) % SM_SIZE not in (5, 7)    # status, PDI activate
+        return 0x0010 <= offset < 0x0012
 
     def _write(self, span, data):
         buf, off = span

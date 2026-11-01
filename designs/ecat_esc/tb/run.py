@@ -24,6 +24,7 @@ TESTS = {
     "test_cdc": "async_fifo",
     "test_parse": "frame_parse",
     "test_delay": "delay_line",
+    "test_regfile": "regfile",
 }
 
 

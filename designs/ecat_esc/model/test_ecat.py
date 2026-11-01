@@ -125,6 +125,30 @@ class MemoryTest(unittest.TestCase):
         self.assertEqual(s.regs[0x0004], 3)
 
 
+class RegisterAccessTest(unittest.TestCase):
+    """Register map details confirmed against TI's ESC register list
+    (software-dl.ti.com ... ETHERCAT_SUBDEVICE_CONTROLLER_REGISTER_LIST)."""
+
+    def write(self, s, address, data):
+        run(s, [Datagram(CMD["APWR"], 1, adp_ado(0, address), data)])
+
+    def test_fmmu_reserved_bytes_are_read_only(self):
+        s = SlaveModel()
+        self.write(s, 0x0600, bytes(range(1, 17)))
+        self.assertEqual(bytes(s.regs[0x0600:0x060D]), bytes(range(1, 14)))
+        self.assertEqual(bytes(s.regs[0x060D:0x0610]), b"\x00\x00\x00")
+
+    def test_syncmanager_status_and_pdi_activate_are_read_only(self):
+        s = SlaveModel()
+        self.write(s, 0x0800, bytes(range(1, 9)))
+        self.assertEqual(bytes(s.regs[0x0800:0x0808]), bytes([1, 2, 3, 4, 5, 0, 7, 0]))
+
+    def test_station_alias_is_not_writable_from_ethercat(self):
+        s = SlaveModel()
+        self.write(s, 0x0012, b"\x34\x12")
+        self.assertEqual(bytes(s.regs[0x0012:0x0014]), b"\x00\x00")
+
+
 class LogicalTest(unittest.TestCase):
     def test_lrw_through_fmmu(self):
         s = SlaveModel(ram_bytes=64)
