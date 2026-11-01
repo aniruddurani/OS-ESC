@@ -4,7 +4,8 @@ import tempfile
 import unittest
 
 from flowlib.cli import main
-from flowlib.digital import parse_cocotb_results, parse_verilator_lint, read_metrics
+from flowlib.digital import (parse_cocotb_results, parse_verilator_lint, preset, read_metrics,
+                             summarize_config)
 
 FIXTURES = os.path.join(os.path.dirname(__file__), "..", "fixtures", "digital")
 
@@ -162,6 +163,129 @@ class DigitalCliTest(unittest.TestCase):
         rc = main(["dpnr", "--metrics", os.path.join(self.tmp.name, "nope.json"),
                    "--design", "ecat_esc", "--out", self.out, "--zero", "x"])
         self.assertEqual(rc, 1)
+        self.assertEqual(self.report()["status"], "error")
+
+    # --- the gates themselves: the --preset lists ------------------------------
+
+    def good_metrics(self, stage):
+        zero, nonneg = preset(stage)
+        m = {name: 0 for name in zero}
+        m.update({name: 1.5 for name in nonneg})
+        return m
+
+    def run_preset(self, stage, metrics):
+        path = self.write("m.json", json.dumps(metrics))
+        return main([stage, "--metrics", path, "--preset", stage, "--design", "ecat_esc",
+                     "--out", self.out])
+
+    def test_preset_good_metrics_pass(self):
+        for stage in ("dsynth", "dpnr"):
+            self.assertEqual(self.run_preset(stage, self.good_metrics(stage)), 0, stage)
+
+    def test_preset_covers_the_required_checks(self):
+        zero, nonneg = preset("dpnr")
+        for name in ("magic__drc_error__count", "klayout__drc_error__count",
+                     "design__lvs_error__count", "antenna__violating__nets",
+                     "timing__setup_vio__count", "timing__hold_vio__count"):
+            self.assertIn(name, zero)
+        for corner in ("nom_tt_025C_1v80", "max_ss_100C_1v60", "min_ff_n40C_1v95"):
+            self.assertIn(f"timing__setup__ws__corner:{corner}", nonneg)
+            self.assertIn(f"timing__hold__ws__corner:{corner}", nonneg)
+        self.assertIn("design__inferred_latch__count", preset("dsynth")[0])
+
+    def test_dpnr_fails_on_each_zero_metric(self):
+        for name in preset("dpnr")[0]:
+            m = self.good_metrics("dpnr")
+            m[name] = 2
+            self.assertEqual(self.run_preset("dpnr", m), 1, name)
+            r = self.report()
+            self.assertEqual(r["status"], "fail", name)
+            self.assertIn(name, json.dumps(r["errors"]))
+
+    def test_dpnr_fails_on_each_negative_slack(self):
+        for name in preset("dpnr")[1]:
+            m = self.good_metrics("dpnr")
+            m[name] = -0.01
+            self.assertEqual(self.run_preset("dpnr", m), 1, name)
+            self.assertEqual(self.report()["status"], "fail", name)
+
+    def test_dpnr_errors_on_each_missing_metric(self):
+        for name in preset("dpnr")[0] + preset("dpnr")[1]:
+            m = self.good_metrics("dpnr")
+            del m[name]
+            self.assertEqual(self.run_preset("dpnr", m), 1, name)
+            self.assertEqual(self.report()["status"], "error", name)
+
+
+class PartialRunTest(DigitalCliTest):
+    """A flow that stops early (for example at a timing check) leaves the later
+    metrics unwritten; the violation it did record must still be what is reported."""
+
+    def partial(self, extra):
+        m = {n: 0 for n in preset("dpnr")[0] if "drc" not in n and "lvs" not in n}
+        m.update({n: 1.0 for n in preset("dpnr")[1]})
+        m.update(extra)
+        return m
+
+    def test_violation_wins_over_missing_metrics(self):
+        m = self.partial({"timing__setup__ws": -0.5, "timing__setup_vio__count": 12})
+        rc = self.run_preset_dict(m)
+        self.assertEqual(rc, 1)
+        r = self.report()
+        self.assertEqual(r["status"], "fail")
+        text = json.dumps(r["errors"])
+        self.assertIn("timing__setup__ws", text)
+        self.assertIn("magic__drc_error__count", text)       # and the gap is still listed
+
+    def test_only_missing_metrics_is_an_error(self):
+        self.assertEqual(self.run_preset_dict(self.partial({})), 1)
+        self.assertEqual(self.report()["status"], "error")
+
+    def test_state_out_json_with_a_metrics_key_is_accepted(self):
+        path = self.write("state_out.json", json.dumps({"metrics": self.good_metrics_full()}))
+        rc = main(["dpnr", "--metrics", path, "--preset", "dpnr", "--design", "ecat_esc",
+                   "--out", self.out])
+        self.assertEqual(rc, 0)
+
+    def run_preset_dict(self, metrics):
+        path = self.write("m.json", json.dumps(metrics))
+        return main(["dpnr", "--metrics", path, "--preset", "dpnr", "--design", "ecat_esc",
+                     "--out", self.out])
+
+    def good_metrics_full(self):
+        zero, nonneg = preset("dpnr")
+        m = {n: 0 for n in zero}
+        m.update({n: 1.5 for n in nonneg})
+        return m
+
+
+class ConfigTableTest(DigitalCliTest):
+    def metrics_file(self, name, area, ws):
+        return self.write(name, json.dumps({
+            "design__instance__count": 1000, "design__instance__area": area,
+            "design__die__area": area * 2, "timing__setup__ws": ws, "timing__hold__ws": 0.3}))
+
+    def test_summary_estimates_fmax_from_the_worst_setup_slack(self):
+        info = summarize_config(json.loads(fixture("metrics.json")), clock_period_ns=10.0)
+        self.assertEqual(info["area_um2"], 6277.27)
+        self.assertAlmostEqual(info["fmax_mhz_est"], 1000.0 / (10.0 - 3.9856652439898355), places=3)
+
+    def test_table_has_every_configuration(self):
+        paths = [f"{n}={self.metrics_file(n + '.json', a, w)}"
+                 for n, a, w in (("min", 50000, 3.0), ("default", 190000, 2.0), ("max", 600000, 0.5))]
+        argv = ["dconfigs", "--design", "ecat_esc", "--out", self.out, "--clock-period", "10"]
+        for p in paths:
+            argv += ["--metrics", p]
+        self.assertEqual(main(argv), 0)
+        r = self.report()
+        self.assertEqual(r["status"], "pass")
+        self.assertEqual(sorted(r["metrics"]["configs"]), ["default", "max", "min"])
+        self.assertEqual(r["metrics"]["configs"]["max"]["area_um2"], 600000)
+
+    def test_table_errors_when_a_configuration_has_no_metrics(self):
+        argv = ["dconfigs", "--design", "ecat_esc", "--out", self.out, "--clock-period", "10",
+                "--metrics", "min=" + os.path.join(self.tmp.name, "nope.json")]
+        self.assertEqual(main(argv), 1)
         self.assertEqual(self.report()["status"], "error")
 
 

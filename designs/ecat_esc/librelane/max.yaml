@@ -1,0 +1,19 @@
+# Largest configuration in the area table: 8 FMMUs and SyncManagers, 1 KiB of
+# process RAM (flop-based for now), full trace.
+DESIGN_NAME: esc_top
+VERILOG_FILES: dir::../rtl/*.v
+CLOCK_PORT: [clk, rx_clk, tx_clk]
+CLOCK_PERIOD: 10
+PNR_SDC_FILE: dir::esc.sdc
+SIGNOFF_SDC_FILE: dir::esc.sdc
+
+SYNTH_PARAMETERS:
+  - N_FMMU=8
+  - N_SM=8
+  - RAM_BYTES=1024
+  - DIAG_EN=1
+  - TRACE_DEPTH=8
+  - CNT_W=16
+  - FIFO_DEPTH=16
+
+FP_CORE_UTIL: 35

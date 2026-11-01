@@ -10,5 +10,7 @@
   "timing__setup_vio__count": 0,
   "timing__hold_vio__count": 0,
   "timing__setup__ws__corner:max_ss_100C_1v60": -0.25,
-  "design__instance__area": 6277.27
+  "design__instance__area": 6277.27,
+  "design__instance__count": 747,
+  "design__die__area": 9204.56
 }

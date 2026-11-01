@@ -1,0 +1,19 @@
+# Used only by `make dselftest`: the smallest configuration with an impossible 1 ns
+# (1 GHz) core clock. dpnr must fail on setup timing.
+DESIGN_NAME: esc_top
+VERILOG_FILES: dir::../rtl/*.v
+CLOCK_PORT: [clk, rx_clk, tx_clk]
+CLOCK_PERIOD: 1
+PNR_SDC_FILE: dir::esc.sdc
+SIGNOFF_SDC_FILE: dir::esc.sdc
+
+SYNTH_PARAMETERS:
+  - N_FMMU=1
+  - N_SM=1
+  - RAM_BYTES=64
+  - DIAG_EN=1
+  - TRACE_DEPTH=2
+  - CNT_W=8
+  - FIFO_DEPTH=16
+
+FP_CORE_UTIL: 35

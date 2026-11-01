@@ -11,7 +11,7 @@ import sys
 import xml.etree.ElementTree as ET
 
 from flowlib.deck import PORT_ORDER, make_deck
-from flowlib.digital import parse_cocotb_results, parse_verilator_lint, read_metrics
+from flowlib.digital import parse_cocotb_results, parse_verilator_lint, preset, read_available, summarize_config
 from flowlib.parsers import (
     count_subckt_devices,
     drc_status,
@@ -178,17 +178,41 @@ def cmd_dmetrics(a):
     if text is None:
         return write_report(a.out, stage, a.design, "error", {},
                             [{"message": f"metrics file missing: {a.metrics}"}], a.metrics)
+    pz, pn = preset(a.preset) if a.preset else ([], [])
+    a.zero, a.nonneg = list(a.zero) + pz, list(a.nonneg) + pn
     names = list(a.zero) + list(a.nonneg)
     try:
-        values = read_metrics(text, names)
-    except KeyError as e:
+        values, missing = read_available(text, names)
+    except ValueError as e:
         return write_report(a.out, stage, a.design, "error", {},
-                            [{"message": f"metric not in metrics file: {e.args[0]}"}], a.metrics)
+                            [{"message": f"metrics file unreadable: {e}"}], a.metrics)
     errors = [{"metric": n, "message": f"{n} = {values[n]}, expected 0"}
-              for n in a.zero if values[n] != 0]
+              for n in a.zero if n in values and values[n] != 0]
     errors += [{"metric": n, "message": f"{n} = {values[n]}, expected >= 0"}
-               for n in a.nonneg if values[n] < 0]
-    return write_report(a.out, stage, a.design, "fail" if errors else "pass", values, errors, a.metrics)
+               for n in a.nonneg if n in values and values[n] < 0]
+    # A flow that stopped early leaves later metrics unwritten: a recorded violation is
+    # a "fail", and the gaps are listed beside it; gaps alone are an "error".
+    gaps = [{"metric": n, "message": f"metric not in metrics file: {n}"} for n in missing]
+    status = "fail" if errors else ("error" if gaps else "pass")
+    return write_report(a.out, stage, a.design, status, values, errors + gaps, a.metrics)
+
+
+def cmd_dconfigs(a):
+    """Area and frequency per configuration (a report, not a gate). Each --metrics is
+    NAME=path to that configuration's final metrics.json."""
+    rows, errors = {}, []
+    for item in a.metrics:
+        name, _, path = item.partition("=")
+        text = _read(path)
+        if text is None:
+            errors.append({"config": name, "message": f"metrics file missing: {path}"})
+            continue
+        try:
+            rows[name] = summarize_config(json.loads(text), a.clock_period)
+        except (KeyError, ValueError) as e:
+            errors.append({"config": name, "message": f"metrics unreadable: {e!r}"})
+    status = "error" if errors or not rows else "pass"
+    return write_report(a.out, "dconfigs", a.design, status, {"configs": rows}, errors, "")
 
 
 STAGE_ORDER = ["netlist", "sim", "layout", "drc", "lvs", "pex"]
@@ -346,11 +370,20 @@ def build_parser():
     s.add_argument("--out", required=True)
     s.set_defaults(func=cmd_dsim)
 
+    s = sub.add_parser("dconfigs")
+    s.add_argument("--metrics", action="append", required=True, help="NAME=path to final metrics.json")
+    s.add_argument("--clock-period", type=float, required=True, help="core clock period in ns")
+    s.add_argument("--design", required=True)
+    s.add_argument("--out", required=True)
+    s.set_defaults(func=cmd_dconfigs)
+
     for name in ("dsynth", "dpnr"):
         s = sub.add_parser(name)
         s.add_argument("--metrics", required=True)
         s.add_argument("--zero", action="append", default=[], help="metric that must be 0")
         s.add_argument("--nonneg", action="append", default=[], help="metric that must be >= 0")
+        s.add_argument("--preset", choices=["dsynth", "dpnr"],
+                       help="also require the standard metric lists for that stage")
         s.add_argument("--design", required=True)
         s.add_argument("--out", required=True)
         s.set_defaults(func=cmd_dmetrics)

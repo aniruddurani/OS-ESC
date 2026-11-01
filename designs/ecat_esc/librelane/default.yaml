@@ -1,0 +1,18 @@
+# Default configuration: the size the tests run at (see tb/run.py).
+DESIGN_NAME: esc_top
+VERILOG_FILES: dir::../rtl/*.v
+CLOCK_PORT: [clk, rx_clk, tx_clk]
+CLOCK_PERIOD: 10
+PNR_SDC_FILE: dir::esc.sdc
+SIGNOFF_SDC_FILE: dir::esc.sdc
+
+SYNTH_PARAMETERS:
+  - N_FMMU=3
+  - N_SM=4
+  - RAM_BYTES=256
+  - DIAG_EN=1
+  - TRACE_DEPTH=8
+  - CNT_W=16
+  - FIFO_DEPTH=16
+
+FP_CORE_UTIL: 35
