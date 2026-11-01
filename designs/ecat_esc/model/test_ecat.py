@@ -9,6 +9,10 @@ import ecat
 from ecat import CMD, Datagram, SlaveModel, build_frame, parse_frame
 
 
+def fcs_ok(frame):
+    return zlib.crc32(frame[:-4]).to_bytes(4, "little") == frame[-4:]
+
+
 def adp_ado(adp, ado):
     """Physical address field: position/station in the low half, offset in the high half."""
     return (ado << 16) | adp
@@ -202,53 +206,73 @@ class FrameValidityTest(unittest.TestCase):
         self.assertEqual([d.wkc for d in out], [1, 1])
         self.assertEqual(out[1].data, b"\x01\x00")
 
-    def test_malformed_length_dropped(self):
+    # Policy (ruling, Task 8): the datapath is cut-through, so writes land as the
+    # bytes pass. A frame that turns out bad is still forwarded, but with a
+    # deliberately wrong FCS so the next device and the master discard it, and
+    # the cause is counted. A frame shorter than 5 bytes produces no output.
+
+    def test_malformed_length_is_poisoned_and_not_executed(self):
         # Review Focus 4: a datagram length that runs past the frame end.
         s = SlaveModel()
         raw = bytearray(build_frame([Datagram(CMD["APWR"], 1, adp_ado(0, 0x0010), b"\x34\x12")]))
         raw[14 + 2 + 6:14 + 2 + 8] = struct.pack("<H", 1400)       # datagram length field
         raw[-4:] = zlib.crc32(bytes(raw[:-4])).to_bytes(4, "little")
-        self.assertIsNone(s.process(bytes(raw)))
-        self.assertEqual(s.station_address, 0)
+        out = s.process(bytes(raw))
+        self.assertFalse(fcs_ok(out))
+        self.assertEqual(s.station_address, 0)                     # the bad datagram never ran
         self.assertEqual(s.counters.malformed, 1)
 
-    def test_ethercat_length_disagreeing_with_frame_dropped(self):
+    def test_ethercat_length_disagreeing_with_frame_is_poisoned(self):
         s = SlaveModel()
         raw = bytearray(build_frame([Datagram(CMD["APWR"], 1, adp_ado(0, 0x0010), b"\x34\x12")]))
         raw[14:16] = struct.pack("<H", (1 << 12) | 1200)           # EtherCAT length too big
         raw[-4:] = zlib.crc32(bytes(raw[:-4])).to_bytes(4, "little")
-        self.assertIsNone(s.process(bytes(raw)))
-        self.assertEqual((s.station_address, s.counters.malformed), (0, 1))
+        out = s.process(bytes(raw))
+        self.assertFalse(fcs_ok(out))
+        self.assertEqual(s.counters.malformed, 1)
 
-    def test_bad_fcs_flagged(self):
+    def test_leading_datagrams_run_before_a_malformed_one(self):
         s = SlaveModel()
-        raw = bytearray(build_frame([Datagram(CMD["APWR"], 1, adp_ado(0, 0x0010), b"\x34\x12")]))
-        raw[-1] ^= 0xFF
-        self.assertIsNone(s.process(bytes(raw)))
-        self.assertEqual(s.station_address, 0)               # writes blocked by default
-        self.assertEqual(s.counters.crc_failures, 1)
+        raw = bytearray(build_frame([
+            Datagram(CMD["APWR"], 1, adp_ado(0, 0x0010), b"\x34\x12", more=True),
+            Datagram(CMD["NOP"], 2, 0, b"\x00")]))
+        raw[16 + 14 + 6:16 + 14 + 8] = struct.pack("<H", 1400)    # break the second datagram
+        raw[-4:] = zlib.crc32(bytes(raw[:-4])).to_bytes(4, "little")
+        out = s.process(bytes(raw))
+        self.assertEqual(s.station_address, 0x1234)
+        self.assertFalse(fcs_ok(out))
+        self.assertEqual(s.counters.malformed, 1)
 
-    def test_bad_fcs_policy_commit_writes_when_enabled(self):
-        s = SlaveModel(commit_on_bad_fcs=True)
+    def test_bad_fcs_writes_land_and_frame_is_poisoned(self):
+        s = SlaveModel()
         raw = bytearray(build_frame([Datagram(CMD["APWR"], 1, adp_ado(0, 0x0010), b"\x34\x12")]))
         raw[-1] ^= 0xFF
         out = s.process(bytes(raw))
         self.assertEqual(s.station_address, 0x1234)
         self.assertEqual(s.counters.crc_failures, 1)
-        self.assertNotEqual(zlib.crc32(out[:-4]).to_bytes(4, "little"), out[-4:])  # stays invalid
+        self.assertFalse(fcs_ok(out))
 
-    def test_runt_and_oversize_counted(self):
+    def test_good_frame_keeps_a_valid_fcs(self):
         s = SlaveModel()
-        self.assertIsNone(s.process(bytes(40)))
-        self.assertIsNone(s.process(bytes(1600)))
-        self.assertEqual((s.counters.runts, s.counters.oversize), (1, 1))
+        out = s.process(build_frame([Datagram(CMD["NOP"], 1, 0, b"\x00")]))
+        self.assertTrue(fcs_ok(out))
 
-    def test_non_ethercat_frame_counted_and_dropped(self):
+    def test_runt_and_oversize_are_counted_and_poisoned(self):
+        s = SlaveModel()
+        runt, big = s.process(bytes(40)), s.process(bytes(1600))
+        self.assertEqual((len(runt), len(big)), (40, 1600))
+        self.assertFalse(fcs_ok(runt) or fcs_ok(big))
+        self.assertEqual((s.counters.runts, s.counters.oversize), (1, 1))
+        self.assertIsNone(s.process(bytes(4)))
+
+    def test_non_ethercat_frame_is_counted_and_poisoned(self):
         s = SlaveModel()
         raw = bytearray(build_frame([Datagram(CMD["NOP"], 1, 0, b"\x00")]))
         raw[12:14] = b"\x08\x00"
         raw[-4:] = zlib.crc32(bytes(raw[:-4])).to_bytes(4, "little")
-        self.assertIsNone(s.process(bytes(raw)))
+        out = s.process(bytes(raw))
+        self.assertEqual(out[:-4], bytes(raw[:-4]))
+        self.assertFalse(fcs_ok(out))
         self.assertEqual(s.counters.non_ethercat, 1)
 
     def test_counters_track_datagrams(self):

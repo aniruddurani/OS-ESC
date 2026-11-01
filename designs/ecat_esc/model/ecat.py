@@ -74,26 +74,39 @@ def build_frame(datagrams, dst=b"\xff" * 6, src=DEFAULT_SRC, with_fcs=True):
     return body + _fcs(body) if with_fcs else body
 
 
-def _walk(raw):
-    """Datagrams of a frame that has already passed the Ethernet checks."""
+def _walk_partial(raw):
+    """([(position, Datagram)], malformed): the datagrams that fit, in order, and
+    whether the structure is broken. Mirrors rtl/frame_parse.v, which sees the FCS
+    and padding bytes as frame bytes too: the EtherCAT length must be at least one
+    datagram (12 bytes), each datagram must fit what is left of that length, and
+    the frame must not end inside a header or datagram."""
     word, = struct.unpack_from("<H", raw, 14)
     length, ptype = word & 0x7FF, word >> 12
-    end = 16 + length
-    if ptype != 1 or end > len(raw) - 4:
-        raise FrameError("EtherCAT header disagrees with the frame")
-    out, pos = [], 16
-    while pos < end:
-        if pos + 10 > end:
-            raise FrameError("truncated datagram header")
+    if ptype != 1 or length < 12:
+        return [], True
+    out, pos, remain = [], 16, length
+    while remain:
+        if remain < 12 or pos + 10 > len(raw):
+            return out, True
         cmd, idx, addr, lw, irq = struct.unpack_from("<BBIHH", raw, pos)
         n = lw & 0x7FF
-        if pos + 10 + n + 2 > end:
-            raise FrameError("datagram runs past the EtherCAT area")
+        if remain - 10 < n + 2 or pos + 10 + n + 2 > len(raw):
+            return out, True
         data = bytes(raw[pos + 10:pos + 10 + n])
         wkc, = struct.unpack_from("<H", raw, pos + 10 + n)
-        out.append(Datagram(cmd, idx, addr, data, irq, bool(lw & 0x8000), bool(lw & 0x4000), wkc))
-        pos += 10 + n + 2
-    return out
+        out.append((pos, Datagram(cmd, idx, addr, data, irq, bool(lw & 0x8000),
+                                  bool(lw & 0x4000), wkc)))
+        pos += 12 + n
+        remain -= 12 + n
+    return out, False
+
+
+def _walk(raw):
+    """Datagrams of a well-formed frame; FrameError if the structure is broken."""
+    items, malformed = _walk_partial(raw)
+    if malformed:
+        raise FrameError("EtherCAT header or datagrams disagree with the frame")
+    return [d for _, d in items]
 
 
 def parse_frame(raw, check_fcs=True):
@@ -107,10 +120,8 @@ def parse_frame(raw, check_fcs=True):
 
 
 class SlaveModel:
-    def __init__(self, station_address=0, n_fmmu=3, ram_bytes=1024, n_sm=4,
-                 commit_on_bad_fcs=False):
+    def __init__(self, station_address=0, n_fmmu=3, ram_bytes=1024, n_sm=4):
         self.n_fmmu, self.n_sm = n_fmmu, n_sm
-        self.commit_on_bad_fcs = commit_on_bad_fcs
         self.regs = bytearray(REG_SPACE)
         self.ram = bytearray(ram_bytes)
         self.counters = Counters()
@@ -227,40 +238,46 @@ class SlaveModel:
 
     # --- frame ----------------------------------------------------------
     def process(self, raw):
-        """Response frame (with regenerated FCS), or None if the frame is dropped."""
+        """The frame as this ESC sends it on, FCS included, or None when the input
+        is too short (under 5 bytes) to produce any output.
+
+        Cut-through behaviour: datagrams execute as the bytes pass, so a frame that
+        turns out bad (wrong FCS, runt, oversize, not EtherCAT, malformed) cannot
+        be held back. It is forwarded with a deliberately wrong FCS, so the next
+        device and the master discard it, and the cause is counted. Datagrams that
+        completed before a malformation have already run."""
         c = self.counters
         c.frames += 1
-        if len(raw) < MIN_FRAME:
+        if len(raw) < 5:
             c.runts += 1
             return None
+        poison = False
+        if len(raw) < MIN_FRAME:
+            c.runts += 1
+            poison = True
         if len(raw) > MAX_FRAME:
             c.oversize += 1
-            return None
-        if struct.unpack_from(">H", raw, 12)[0] != ETHERTYPE:
-            c.non_ethercat += 1
-            return None
-        fcs_ok = _fcs(raw[:-4]) == raw[-4:]
-        if not fcs_ok:
+            poison = True
+        if _fcs(raw[:-4]) != raw[-4:]:
             c.crc_failures += 1
-            if not self.commit_on_bad_fcs:
-                return None
-        try:
-            dgs = _walk(raw)
-        except FrameError:
-            c.malformed += 1
-            return None
-        out = [self._execute(d) for d in dgs]
-        rebuilt = bytearray(raw[:-4])
-        pos = 16
-        for o in out:
-            word = len(o.data) | (0x4000 if o.circ else 0) | (0x8000 if o.more else 0)
-            struct.pack_into("<BBIHH", rebuilt, pos, o.cmd, o.idx, o.address, word, o.irq)
-            pos += 10
-            rebuilt[pos:pos + len(o.data)] = o.data
-            pos += len(o.data)
-            struct.pack_into("<H", rebuilt, pos, o.wkc)
-            pos += 2
-        fcs = _fcs(bytes(rebuilt))
-        if not fcs_ok:                    # a corrupted frame stays corrupted downstream
+            poison = True
+        body = bytearray(raw[:-4])
+        if len(raw) >= 14:
+            if struct.unpack_from(">H", raw, 12)[0] != ETHERTYPE:
+                c.non_ethercat += 1
+                poison = True
+            else:
+                items, malformed = _walk_partial(raw) if len(raw) >= 16 else ([], True)
+                if malformed:
+                    c.malformed += 1
+                    poison = True
+                for pos, dg in items:
+                    o = self._execute(dg)
+                    word = len(o.data) | (0x4000 if o.circ else 0) | (0x8000 if o.more else 0)
+                    struct.pack_into("<BBIHH", body, pos, o.cmd, o.idx, o.address, word, o.irq)
+                    body[pos + 10:pos + 10 + len(o.data)] = o.data
+                    struct.pack_into("<H", body, pos + 10 + len(o.data), o.wkc)
+        fcs = _fcs(bytes(body))
+        if poison:
             fcs = bytes(b ^ 0xFF for b in fcs)
-        return bytes(rebuilt) + fcs
+        return bytes(body) + fcs
