@@ -1,0 +1,15 @@
+# Headless IIC-OSIC-TOOLS container for the silicon-flow repo.
+# The image tag pins every tool and the sky130A PDK; change it only in its own
+# commit, after ./flow all and ./flow selftest pass on the new tag.
+services:
+  iic:
+    image: hpretl/iic-osic-tools:2026.10
+    container_name: sf-iic
+    # ui_startup.sh (the image entrypoint) runs the command after -s once its
+    # own setup is done, and skips the VNC desktop.
+    command: ["-s", "sleep", "infinity"]
+    volumes:
+      - ./:/foss/designs/silicon-flow
+    working_dir: /foss/designs/silicon-flow
+    security_opt:
+      - seccomp=unconfined

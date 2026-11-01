@@ -1,0 +1,9 @@
+{
+  "measurements": {
+    "vm":   {"min": 0.70, "max": 1.10, "unit": "V"},
+    "voh":  {"min": 1.75, "unit": "V"},
+    "vol":  {"max": 0.05, "unit": "V"},
+    "tphl": {"max": 1e-10, "unit": "s"},
+    "tplh": {"max": 1e-10, "unit": "s"}
+  }
+}

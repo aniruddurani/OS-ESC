@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# Run the silicon flow inside the sf-iic container.
+#
+#   ./flow up             start the container
+#   ./flow down           stop and remove it
+#   ./flow shell          interactive login shell inside it
+#   ./flow <make args>    run make in the repo, e.g. ./flow sim DESIGN=inv
+#
+# Exit code is make's exit code.
+set -euo pipefail
+
+# Stop Git Bash from rewriting container paths like /foss/... into C:/...
+export MSYS_NO_PATHCONV=1
+
+CONTAINER=sf-iic
+REPO_IN_CONTAINER=/foss/designs/silicon-flow
+
+cd "$(dirname "$0")"
+
+if ! docker info >/dev/null 2>&1; then
+  echo "Docker is not running. Start Docker Desktop and retry." >&2
+  exit 2
+fi
+
+is_running() {
+  [ "$(docker inspect -f '{{.State.Running}}' "$CONTAINER" 2>/dev/null || true)" = "true" ]
+}
+
+start() {
+  docker compose up -d >&2
+  for _ in $(seq 1 30); do
+    is_running && return 0
+    sleep 1
+  done
+  echo "Container $CONTAINER did not start within 30 s." >&2
+  return 1
+}
+
+case "${1:-}" in
+  up)
+    start
+    ;;
+  down)
+    docker compose down
+    ;;
+  shell)
+    is_running || start
+    docker exec -it -w "$REPO_IN_CONTAINER" "$CONTAINER" bash -l
+    ;;
+  "")
+    echo "usage: ./flow up|down|shell|<make target> [VAR=value ...]" >&2
+    exit 2
+    ;;
+  *)
+    is_running || start
+    # Login shell: the image sets PATH and PDK variables in /etc/profile.d.
+    docker exec -w "$REPO_IN_CONTAINER" "$CONTAINER" bash -lc 'make "$@"' make "$@"
+    ;;
+esac
