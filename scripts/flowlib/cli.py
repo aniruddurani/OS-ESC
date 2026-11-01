@@ -162,7 +162,7 @@ def cmd_summary(a):
 
 def cmd_deck(a):
     try:
-        deck = make_deck(a.dut, a.tb, a.lib, a.corner, a.design)
+        deck = make_deck(a.dut, a.tb, a.lib, a.corner, a.design, a.temp)
     except (OSError, ValueError) as e:
         print(f"deck: {e}", file=sys.stderr)
         return 1
@@ -262,6 +262,7 @@ def build_parser():
     s.add_argument("--tb", required=True)
     s.add_argument("--lib", required=True)
     s.add_argument("--corner", required=True)
+    s.add_argument("--temp", help="simulation temperature in C, written as a .temp card")
     s.add_argument("--design", required=True)
     s.add_argument("--out", required=True)
     s.set_defaults(func=cmd_deck)

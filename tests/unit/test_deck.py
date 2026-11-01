@@ -29,6 +29,12 @@ class MakeDeckTest(unittest.TestCase):
             ".end",
         ])
 
+    def test_temperature_is_written_before_the_includes(self):
+        dut = self.dut(".subckt inv in out vdd vss\nXM1 out in vss vss nfet\n.ends\n")
+        deck = make_deck(dut, "tb.spice", "lib.spice", "ss", "inv", temp=125)
+        lines = [l for l in deck.splitlines() if l.startswith(".")]
+        self.assertEqual(lines[:3], [".temp 125", '.lib "lib.spice" ss', f'.include "{dut}"'])
+
     def test_wrong_port_order_is_refused(self):
         # Swapped ports would silently swap nets in the testbench (Review Focus 1).
         dut = self.dut(".subckt inv out in vdd vss\n.ends\n")
