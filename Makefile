@@ -54,6 +54,7 @@ NETLIST  := $(BUILD)/$(DESIGN).spice
 TB     := designs/$(DESIGN)/tb/$(DESIGN)_tb.spice
 SPEC   := designs/$(DESIGN)/spec.json
 CORNER ?= tt
+TEMP   ?= 27
 
 LAYOUT_SCRIPT ?= designs/$(DESIGN)/layout/$(DESIGN).tcl
 GDS           := $(BUILD)/$(DESIGN).gds
@@ -66,7 +67,15 @@ drc: $(STAMPS)/drc.pass
 lvs: $(STAMPS)/lvs.pass
 pex: $(STAMPS)/pex.pass
 
-.PHONY: all png selftest
+.PHONY: all png selftest corners
+
+# Signoff corners as <model corner>:<temperature C>. Each runs the whole flow in
+# its own build directory; every corner runs even if one fails, then the target
+# fails if any did. The limits in spec.json apply unchanged at every corner.
+CORNERS := tt:27 ss:125 ss:-40 ff:-40 ff:125 sf:27 fs:27
+
+corners:
+	@rc=0; for ct in $(CORNERS); do c=$${ct%%:*}; t=$${ct##*:}; 	  echo "== corner $$c at $$t C"; 	  $(MAKE) --no-print-directory all CORNER=$$c TEMP=$$t BUILD=$(BUILD)/corners/$${c}_$${t} >/dev/null 2>&1 	    && echo "   pass" || { echo "   FAIL (see $(BUILD)/corners/$${c}_$${t}/reports/summary.json)"; rc=1; }; 	done; exit $$rc
 
 # Every stage in order, stopping at the first failure. The summary is always
 # rebuilt from the reports that exist now, so it can never show an old pass.
@@ -95,7 +104,7 @@ $(STAMPS)/pex.pass: $(STAMPS)/lvs.pass $(STAMPS)/sim.pass $(TB) $(SPEC) scripts/
 	-OUT_DIR=$(BUILD) DESIGN=$(DESIGN) magic -dnull -noconsole -rcfile $(MAGICRC) \
 	  scripts/magic_extract_pex.tcl > $(LOGS)/pex_extract.log 2>&1
 	$(PY) deck --dut $(PEX_NETLIST) --tb $(TB) --lib $(NGSPICE_LIB) \
-	  --corner $(CORNER) --design $(DESIGN) --out $(BUILD)/sim/post.spice
+	  --corner $(CORNER) --temp $(TEMP) --design $(DESIGN) --out $(BUILD)/sim/post.spice
 	-ngspice -b -o $(LOGS)/pex.log $(BUILD)/sim/post.spice
 	$(PY) sim --stage pex --log $(LOGS)/pex.log --spec $(SPEC) \
 	  --compare $(REPORTS)/sim.json --design $(DESIGN) --out $(REPORTS)/pex.json
@@ -148,7 +157,7 @@ $(STAMPS)/sim.pass: $(STAMPS)/netlist.pass $(TB) $(SPEC) Makefile
 	@mkdir -p $(BUILD)/sim $(LOGS) $(STAMPS) $(REPORTS)
 	@rm -f $@ $(REPORTS)/sim.json $(BUILD)/sim/pre.spice $(LOGS)/sim.log
 	$(PY) deck --dut $(NETLIST) --tb $(TB) --lib $(NGSPICE_LIB) \
-	  --corner $(CORNER) --design $(DESIGN) --out $(BUILD)/sim/pre.spice
+	  --corner $(CORNER) --temp $(TEMP) --design $(DESIGN) --out $(BUILD)/sim/pre.spice
 	-ngspice -b -o $(LOGS)/sim.log $(BUILD)/sim/pre.spice
 	$(PY) sim --stage sim --log $(LOGS)/sim.log --spec $(SPEC) \
 	  --design $(DESIGN) --out $(REPORTS)/sim.json

@@ -2,7 +2,7 @@
 * The device-under-test netlist and model library are included by the generated
 * top-level deck (flowlib.deck), so the same stimuli measure the schematic and
 * the extracted layout.
-.temp 27
+* The deck sets the temperature (.temp) with the corner.
 
 Xdut in out vdd vss inv
 Vdd vdd 0 1.8
