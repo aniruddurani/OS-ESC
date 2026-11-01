@@ -26,6 +26,9 @@ TESTS = {
     "test_delay": "delay_line",
     "test_regfile": "regfile",
     "test_pdram": "pdram",
+    "test_pdram_macro": "pdram",
+    "test_sram_model": "sram_tb",
+    "test_sram_pdk": "sram_tb",
     "test_dgram": "esc_core",
     "test_logical": "esc_core",
     "test_prefetch": "esc_core",
@@ -41,6 +44,7 @@ TESTS = {
 # Verilog parameters per test module (the test files state the values they assume).
 PARAMS = {
     "test_pdram": {"RAM_BYTES": 256},
+    "test_pdram_macro": {"RAM_BYTES": 2048},
     "test_dgram": {"RAM_BYTES": 256},
     "test_logical": {"RAM_BYTES": 256},
     "test_prefetch": {"RAM_BYTES": 256},
@@ -52,17 +56,26 @@ PARAMS = {
 }
 
 
+PDK_MACRO_VARIANT = {"test_sram_pdk"}
+
+
 def run_one(module, top, rtl_dir, build):
     # RTL plus testbench-only wrappers (tb/*.v); lint covers rtl/ only.
     sources = sorted(glob.glob(os.path.join(rtl_dir, "*.v")) + glob.glob(os.path.join(TB_DIR, "*.v")))
+    if module in PDK_MACRO_VARIANT:      # the PDK's own macro model instead of the behavioural one
+        sources += [os.path.join(os.environ["PDK_ROOT"], "sky130A/libs.ref/sky130_sram_macros/verilog",
+                                 "sky130_sram_1kbyte_1rw1r_8x1024_8.v")]
+    else:
+        sources += sorted(glob.glob(os.path.join(TB_DIR, "models", "*.v")))
+    bdir = os.path.join(build, top + ("_pdk" if module in PDK_MACRO_VARIANT else ""))
     runner = get_runner("verilator")
     runner.build(sources=sources, hdl_toplevel=top,
-                 build_dir=os.path.join(build, top),
+                 build_dir=bdir,
                  build_args=["--timing", "-Wno-fatal", "-Wno-lint", "-Wno-style"],
                  parameters=PARAMS.get(module, {}),
                  always=True)
     return runner.test(hdl_toplevel=top, test_module=module, test_dir=TB_DIR,
-                       build_dir=os.path.join(build, top),
+                       build_dir=bdir,
                        results_xml=os.path.join(build, f"{module}.xml"))
 
 

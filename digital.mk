@@ -14,6 +14,7 @@ DRTL_DIR ?= designs/$(DDESIGN)/rtl
 DRTL     ?= $(sort $(wildcard $(DRTL_DIR)/*.v))
 DTB      := designs/$(DDESIGN)/tb
 DTB_SRC  := $(wildcard $(DTB)/*.py) $(DTB)/manifest.txt
+DLINT_EXTRA ?= $(sort $(wildcard $(DTB)/lint/*.v))   # declarations of macros the RTL instantiates
 
 .PHONY: dlint dsim dsynth dpnr dall dconfigs dselftest
 dlint: $(DSTAMPS)/dlint.pass
@@ -27,7 +28,7 @@ $(DSTAMPS)/dlint.pass: $(DRTL) Makefile digital.mk
 	@rm -f $@ $(DREPORTS)/dlint.json $(DLOGS)/dlint.log
 	@: > $(DLOGS)/dlint.log
 	-@if [ -z "$(DRTL)" ]; then verilator --lint-only -Wall >> $(DLOGS)/dlint.log 2>&1; fi
-	-@for f in $(DRTL); do m=$$(basename $$f .v); 	  verilator --lint-only -Wall --top-module $$m $(DRTL) >> $(DLOGS)/dlint.log 2>&1; done
+	-@for f in $(DRTL); do m=$$(basename $$f .v); 	  verilator --lint-only -Wall --top-module $$m $(DRTL) $(DLINT_EXTRA) >> $(DLOGS)/dlint.log 2>&1; done
 	$(PY) dlint --log $(DLOGS)/dlint.log --design $(DDESIGN) --out $(DREPORTS)/dlint.json
 	@touch $@
 
