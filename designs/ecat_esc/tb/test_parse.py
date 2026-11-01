@@ -11,7 +11,7 @@ from stream_util import OutputLog, StreamDriver
 
 K_OTHER, K_HDR, K_DATA, K_WKC = 0, 1, 2, 3
 OUT = ("o_valid", "o_data", "o_first", "o_last", "o_err", "o_kind", "o_pos",
-       "dg_start", "dg_hdr_done", "dg_cmd", "dg_idx", "dg_addr", "dg_len", "dg_more", "dg_circ",
+       "dg_start", "dg_len_done", "dg_hdr_done", "dg_cmd", "dg_idx", "dg_addr", "dg_len", "dg_more", "dg_circ",
        "ev_end", "ev_runt", "ev_oversize", "ev_non_ethercat", "ev_malformed", "ev_rx_err")
 
 
@@ -63,6 +63,9 @@ async def test_two_datagram_frame_fields(dut):
     starts = [r for r in rows if r["dg_start"]]
     assert [(r["dg_cmd"], r["dg_idx"], r["dg_addr"]) for r in starts] == [
         (CMD["APWR"], 7, (0x0010 << 16) | 0xFFFF), (CMD["FPRD"], 8, (0x0130 << 16) | 0x1001)]
+    early = [r for r in rows if r["dg_len_done"]]
+    assert [r["dg_len"] for r in early] == [2, 4], "dg_len_done: the length is valid after header byte 7"
+    assert [i for i, r in enumerate(rows) if r["dg_len_done"]] < [i for i, r in enumerate(rows) if r["dg_hdr_done"]]
     done = [r for r in rows if r["dg_hdr_done"]]
     assert [(r["dg_len"], r["dg_more"]) for r in done] == [(2, 1), (4, 0)]
     ev, = events(log)

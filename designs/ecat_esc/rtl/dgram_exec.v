@@ -3,7 +3,9 @@
 // Sits on the parser's tagged byte stream and rewrites it one byte per input
 // byte, one clock later. The decision for a datagram is made early:
 //   dg_start     the command and address are known: is this slave addressed?
-//   dg_hdr_done  the length is known: does the access fit the registers/RAM?
+//   dg_len_done  the length is known: does the access fit the registers/RAM? The first
+//                read is started here, two header bytes before the first data byte
+//   dg_hdr_done  the header is complete and fits the frame: writes may land
 // then each data byte is read from or written to memory on the byte-wide
 // memory port as it passes (cut-through; see the ledger ruling on bad frames).
 // Reads are prefetched one byte ahead so the byte is ready when it arrives:
@@ -28,6 +30,7 @@ module dgram_exec #(
     input       [1:0] p_kind,
     input      [10:0] p_pos,
     input             dg_start,
+    input             dg_len_done,
     input             dg_hdr_done,
     input       [7:0] dg_cmd,
     input      [31:0] dg_addr,
@@ -108,7 +111,7 @@ module dgram_exec #(
     wire        rd_hit_n = cmd_l ? fm_q1_rd_hit : (ok && is_rd);
     wire [15:0] rd_addr_n = cmd_l ? fm_q1_rd_addr : (ado + {5'd0, next_off});
 
-    assign fm_calc   = dg_hdr_done && cmd_l;
+    assign fm_calc   = dg_len_done && cmd_l;
     assign fm_q0_off = p_pos;
     assign fm_q1_off = lg_go ? 11'd0 : p_pos + 11'd1;
     wire [8:0] wsum = {1'b0, p_data} + {7'd0, inc};
@@ -159,15 +162,14 @@ module dgram_exec #(
                 addressed <= (cmd_ap && dg_addr[15:0] == 16'd0) ||
                              (cmd_fp && dg_addr[15:0] == station_addr) || cmd_b;
             end
-            if (dg_hdr_done) begin
-                ok <= addressed && fits;
+            if (dg_len_done) begin                 // length known: start the first read early
                 if (cmd_l && dg_len != 11'd0) lg_go <= 1'b1;
                 if (addressed && fits && is_rd && dg_len != 11'd0) begin
                     pf_go   <= 1'b1;
                     pf_addr <= ado;
                 end
             end
-
+            if (dg_hdr_done) ok <= addressed && fits;
             if (p_valid) begin
                 o_valid <= 1'b1;
                 o_first <= p_first;

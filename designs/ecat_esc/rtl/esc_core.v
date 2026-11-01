@@ -31,7 +31,7 @@ module esc_core #(
     wire  [7:0] p_data;
     wire  [1:0] p_kind;
     wire [10:0] p_pos;
-    wire        dg_start, dg_hdr_done, dg_more, dg_circ;
+    wire        dg_start, dg_len_done, dg_hdr_done, dg_more, dg_circ;
     wire  [7:0] dg_cmd, dg_idx;
     wire [31:0] dg_addr;
     wire [10:0] dg_len;
@@ -42,7 +42,7 @@ module esc_core #(
         .valid(in_valid), .data(in_data), .first(in_first), .last(in_last), .err(in_err),
         .o_valid(p_valid), .o_data(p_data), .o_first(p_first), .o_last(p_last), .o_err(p_err),
         .o_kind(p_kind), .o_pos(p_pos),
-        .dg_start(dg_start), .dg_hdr_done(dg_hdr_done),
+        .dg_start(dg_start), .dg_len_done(dg_len_done), .dg_hdr_done(dg_hdr_done),
         .dg_cmd(dg_cmd), .dg_idx(dg_idx), .dg_addr(dg_addr), .dg_len(dg_len),
         .dg_more(dg_more), .dg_circ(dg_circ),
         .ev_end(ev_end), .ev_runt(ev_runt), .ev_oversize(ev_oversize),
@@ -120,7 +120,7 @@ module esc_core #(
         .clk(clk), .rst(rst),
         .p_valid(p_valid), .p_data(p_data), .p_first(p_first), .p_last(p_last),
         .p_kind(p_kind), .p_pos(p_pos),
-        .dg_start(dg_start), .dg_hdr_done(dg_hdr_done),
+        .dg_start(dg_start), .dg_len_done(dg_len_done), .dg_hdr_done(dg_hdr_done),
         .dg_cmd(dg_cmd), .dg_addr(dg_addr), .dg_len(dg_len),
         .station_addr(station_addr), .bad_frame(bad_frame),
         .mem_req(mem_req), .mem_we(mem_we), .mem_addr(mem_addr), .mem_wdata(mem_wdata),

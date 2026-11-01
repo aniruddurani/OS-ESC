@@ -143,12 +143,14 @@ module diag #(
             rd = 8'h00;
     end
 
-    reg       rv1;
-    reg [7:0] rd1;
+    reg       rv1, rv2;
+    reg [7:0] rd1, rd2;
     always @(posedge clk) begin
         rv1        <= rst ? 1'b0 : (mem_req && !mem_we);
         rd1        <= rd;
-        mem_rvalid <= rst ? 1'b0 : rv1;
-        mem_rdata  <= rd1;
+        rv2        <= rst ? 1'b0 : rv1;
+        rd2        <= rd1;
+        mem_rvalid <= rst ? 1'b0 : rv2;
+        mem_rdata  <= rd2;
     end
 endmodule

@@ -5,7 +5,9 @@
 //   o_pos   index within the field (header 0..9, data 0..len-1, wkc 0..1)
 // and decodes each datagram header as it arrives:
 //   dg_start     one cycle after header byte 5: dg_cmd, dg_idx, dg_addr are valid
-//   dg_hdr_done  one cycle after header byte 9: dg_len, dg_more, dg_circ are valid
+//   dg_len_done  one cycle after header byte 7: dg_len, dg_more, dg_circ are valid
+//   dg_hdr_done  one cycle after header byte 9: the header is complete and the datagram
+//                fits in the frame
 // The values are held until the next datagram. At the end of every frame
 // ev_end pulses together with o_last, with these flags:
 //   ev_runt (< 64 bytes incl. FCS), ev_oversize (> 1518), ev_non_ethercat
@@ -30,6 +32,7 @@ module frame_parse (
     output reg [10:0] o_pos,
 
     output reg        dg_start,
+    output reg        dg_len_done,
     output reg        dg_hdr_done,
     output reg  [7:0] dg_cmd,
     output reg  [7:0] dg_idx,
@@ -150,6 +153,7 @@ module frame_parse (
         o_last          <= 1'b0;
         o_err           <= 1'b0;
         dg_start        <= 1'b0;
+        dg_len_done     <= 1'b0;
         dg_hdr_done     <= 1'b0;
         ev_end          <= 1'b0;
         ev_runt         <= 1'b0;
@@ -199,6 +203,7 @@ module frame_parse (
                         dg_len[10:8] <= data[2:0];
                         dg_circ      <= data[6];
                         dg_more      <= data[7];
+                        dg_len_done  <= 1'b1;
                     end
                     4'd9: dg_hdr_done <= (n_state != S_TAIL);
                     default: ;

@@ -1,7 +1,7 @@
 // ESC register file, addresses 0x0000..0x0FFF, behind the byte-wide memory port.
 //
 //   mem_req/mem_we/mem_addr/mem_wdata   request, one byte per cycle
-//   mem_rdata                           valid MEM_LAT = 2 clocks after the
+//   mem_rdata                           valid MEM_LAT = 3 clocks after the
 //                                       request, flagged by mem_rvalid
 // Implemented registers (everything else reads 0 and ignores writes):
 //   0x0000 type, 0x0001 revision, 0x0004 FMMU count, 0x0005 SyncManager count,
@@ -88,8 +88,8 @@ module regfile #(
         endcase
     end
 
-    reg       rv1;
-    reg [7:0] rd1;
+    reg       rv1, rv2;
+    reg [7:0] rd1, rd2;
     integer   i;
 
     always @(posedge clk) begin
@@ -97,6 +97,8 @@ module regfile #(
             sa         <= 16'd0;
             rv1        <= 1'b0;
             rd1        <= 8'd0;
+            rv2        <= 1'b0;
+            rd2        <= 8'd0;
             mem_rvalid <= 1'b0;
             mem_rdata  <= 8'd0;
             for (i = 0; i < 16 * FW; i = i + 1) fm[i] <= 8'd0;
@@ -104,8 +106,10 @@ module regfile #(
         end else begin
             rv1        <= mem_req && !mem_we;
             rd1        <= rd;
-            mem_rvalid <= rv1;
-            mem_rdata  <= rd1;
+            rv2        <= rv1;
+            rd2        <= rd1;
+            mem_rvalid <= rv2;
+            mem_rdata  <= rd2;
             if (mem_req && mem_we) begin
                 if (mem_addr == 16'h0010) sa[7:0]  <= mem_wdata;
                 if (mem_addr == 16'h0011) sa[15:8] <= mem_wdata;

@@ -35,12 +35,13 @@ async def mem_write(dut, addr, val):
 
 
 async def mem_read(dut, addr):
-    """Present a read for one cycle; the data is valid two clocks later."""
+    """Present a read for one cycle; the data is valid three clocks later."""
     dut.mem_req.value = 1
     dut.mem_we.value = 0
     dut.mem_addr.value = addr
     await RisingEdge(dut.clk)
     dut.mem_req.value = 0
+    await RisingEdge(dut.clk)
     await RisingEdge(dut.clk)
     await RisingEdge(dut.clk)
     assert int(dut.mem_rvalid.value) == 1, f"no rvalid for read of {addr:#06x}"
@@ -91,7 +92,7 @@ async def test_read_latency_is_mem_lat(dut):
         await RisingEdge(dut.clk)
     req_at = samples.index((1, 0))
     valid_at = [i for i, (_, v) in enumerate(samples) if v]
-    assert valid_at == [req_at + 2], f"rvalid at {valid_at}, request at {req_at}"
+    assert valid_at == [req_at + 3], f"rvalid at {valid_at}, request at {req_at}"
     assert int(dut.mem_rdata.value) == N_FMMU
 
 
