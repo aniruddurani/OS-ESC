@@ -1,60 +1,11 @@
 """Datagram engine against the reference model: the core (esc_core) is fed the same
 frames as SlaveModel and must produce the same output bytes and poison flag."""
 import random
-import zlib
 
 import cocotb
-from cocotb.clock import Clock
 
-import model_path  # noqa: F401
-from ecat import CMD, Datagram, SlaveModel, build_frame
-from mii_util import StreamMonitor
-from stream_util import StreamDriver
-
-RAM = 256       # esc_core parameter set by run.py for this test
-
-
-def adp_ado(adp, ado):
-    return (ado << 16) | adp
-
-
-def fcs_ok(frame):
-    return zlib.crc32(frame[:-4]).to_bytes(4, "little") == frame[-4:]
-
-
-async def start(dut, seed):
-    cocotb.start_soon(Clock(dut.clk, 10, unit="ns").start())
-    dut.rst.value = 1
-    rng = random.Random(seed)
-    drv = StreamDriver(dut, dut.clk, rng, gap=(5, 9), prefix="in_")
-    mon = StreamMonitor(dut, dut.clk, prefix="out_")
-    await drv.idle(5)
-    dut.rst.value = 0
-    await drv.idle(3)
-    # Reset does not clear the RAM (a real RAM would not either), and cocotb runs
-    # every test in one simulation: zero it through the datapath, on both sides.
-    model = SlaveModel(ram_bytes=RAM)
-    clear = build_frame([Datagram(CMD["BWR"], 0, adp_ado(0, 0x1000), bytes(RAM))])
-    await exchange(drv, mon, model, clear)
-    return drv, mon, rng, model
-
-
-async def exchange(drv, mon, model, frame, err=0):
-    """Send `frame` through the DUT and the model; check the outputs agree."""
-    expected = model.process(frame)
-    before = len(mon.frames)
-    await drv.send(frame, err=err)
-    await drv.idle(200)
-    assert len(mon.frames) == before + 1, "the core must emit exactly one frame per input frame"
-    body, poison = mon.frames[-1]
-    assert body == expected[:-4], "output bytes differ from the model"
-    assert poison == (0 if fcs_ok(expected) else 1) or err, "poison flag differs from the model"
-    return body, poison
-
-
-def one(cmd, address, data, idx=1, wkc=0):
-    return build_frame([Datagram(CMD[cmd], idx, address, data, wkc=wkc)])
-
+from core_util import RAM, adp_ado, exchange, fcs_ok, one, start  # noqa: F401
+from ecat import CMD, Datagram, build_frame
 
 @cocotb.test()
 async def test_apwr_aprd(dut):

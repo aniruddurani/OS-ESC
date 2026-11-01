@@ -26,12 +26,16 @@ TESTS = {
     "test_delay": "delay_line",
     "test_regfile": "regfile",
     "test_dgram": "esc_core",
+    "test_logical": "esc_core",
+    "test_fmmu0": "esc_core",
 }
 
 
 # Verilog parameters per test module (the test files state the values they assume).
 PARAMS = {
     "test_dgram": {"RAM_BYTES": 256},
+    "test_logical": {"RAM_BYTES": 256},
+    "test_fmmu0": {"RAM_BYTES": 256, "N_FMMU": 0},
 }
 
 

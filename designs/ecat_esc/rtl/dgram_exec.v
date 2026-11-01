@@ -48,6 +48,17 @@ module dgram_exec #(
     output reg        o_last,
     output reg        o_err,
 
+    // FMMU interface (logical commands): calc pulses when the length is known;
+    // q0 answers for the current byte, q1 for the byte to prefetch.
+    output            fm_calc,
+    output     [10:0] fm_q0_off,
+    input             fm_q0_rd_hit,
+    input             fm_q0_wr_hit,
+    input      [15:0] fm_q0_wr_addr,
+    output     [10:0] fm_q1_off,
+    input             fm_q1_rd_hit,
+    input      [15:0] fm_q1_rd_addr,
+
     output reg        ev_dg,          // a datagram finished (its WKC passed)
     output reg        ev_addressed,   // ... and this slave was addressed by it
     output reg  [1:0] ev_wkc_inc      // ... and added this to the working counter
@@ -59,10 +70,13 @@ module dgram_exec #(
     wire cmd_ap = (dg_cmd >= 8'd1) && (dg_cmd <= 8'd3);
     wire cmd_fp = (dg_cmd >= 8'd4) && (dg_cmd <= 8'd6);
     wire cmd_b  = (dg_cmd >= 8'd7) && (dg_cmd <= 8'd9);
+    wire cmd_l  = (dg_cmd >= 8'd10) && (dg_cmd <= 8'd12);
     wire is_rd  = (dg_cmd == 8'd1) || (dg_cmd == 8'd3) || (dg_cmd == 8'd4) ||
-                  (dg_cmd == 8'd6) || (dg_cmd == 8'd7) || (dg_cmd == 8'd9);
+                  (dg_cmd == 8'd6) || (dg_cmd == 8'd7) || (dg_cmd == 8'd9) ||
+                  (dg_cmd == 8'd10) || (dg_cmd == 8'd12);
     wire is_wr  = (dg_cmd == 8'd2) || (dg_cmd == 8'd3) || (dg_cmd == 8'd5) ||
-                  (dg_cmd == 8'd6) || (dg_cmd == 8'd8) || (dg_cmd == 8'd9);
+                  (dg_cmd == 8'd6) || (dg_cmd == 8'd8) || (dg_cmd == 8'd9) ||
+                  (dg_cmd == 8'd11) || (dg_cmd == 8'd12);
     wire incr   = cmd_ap || cmd_b;
 
     reg        addressed;
@@ -80,15 +94,32 @@ module dgram_exec #(
     wire        ram_ok  = (ado >= 16'h1000) && ({15'd0, ram_end} <= RAM_LIM);
     wire        fits    = reg_ok || ram_ok;
 
-    wire [1:0] inc = {1'b0, ok && is_rd} + (ok && is_wr ? (is_rd ? 2'd2 : 2'd1) : 2'd0);
+    reg        lg_go;           // logical: prefetch byte 0 one clock after hdr_done
+    reg        rd_seen, wr_seen;
+
+    wire rd_ok  = cmd_l ? rd_seen : (ok && is_rd);
+    wire wr_ok  = cmd_l ? wr_seen : (ok && is_wr);
+    wire [1:0] inc = {1'b0, rd_ok} + (wr_ok ? (is_rd ? 2'd2 : 2'd1) : 2'd0);
+
+    // this byte / the next byte: does it read or write, and where
+    wire        rd_hit_i = cmd_l ? fm_q0_rd_hit : (ok && is_rd);
+    wire        wr_hit_i = cmd_l ? fm_q0_wr_hit : (ok && is_wr);
+    wire [15:0] wr_addr_i = cmd_l ? fm_q0_wr_addr : (ado + {5'd0, p_pos});
+    wire        rd_hit_n = cmd_l ? fm_q1_rd_hit : (ok && is_rd);
+    wire [15:0] rd_addr_n = cmd_l ? fm_q1_rd_addr : (ado + {5'd0, next_off});
+
+    assign fm_calc   = dg_hdr_done && cmd_l;
+    assign fm_q0_off = p_pos;
+    assign fm_q1_off = lg_go ? 11'd0 : p_pos + 11'd1;
     wire [8:0] wsum = {1'b0, p_data} + {7'd0, inc};
 
-    wire [15:0] next_off = {5'd0, p_pos} + 16'd1;
+    wire [10:0] next_off = p_pos + 11'd1;
 
     always @(posedge clk) begin
         mem_req      <= 1'b0;
         mem_we       <= 1'b0;
         pf_go        <= 1'b0;
+        lg_go        <= 1'b0;
         o_valid      <= 1'b0;
         o_first      <= 1'b0;
         o_last       <= 1'b0;
@@ -101,6 +132,8 @@ module dgram_exec #(
             ok        <= 1'b0;
             ado       <= 16'd0;
             carry     <= 1'b0;
+            rd_seen   <= 1'b0;
+            wr_seen   <= 1'b0;
             rbuf      <= 8'd0;
             pf_addr   <= 16'd0;
             mem_addr  <= 16'd0;
@@ -114,13 +147,21 @@ module dgram_exec #(
                 mem_addr <= pf_addr;
             end
 
+            if (lg_go && fm_q1_rd_hit) begin       // logical: prefetch byte 0
+                pf_go   <= 1'b1;
+                pf_addr <= fm_q1_rd_addr;
+            end
+
             if (dg_start) begin
+                rd_seen   <= 1'b0;
+                wr_seen   <= 1'b0;
                 ado       <= dg_addr[31:16];
                 addressed <= (cmd_ap && dg_addr[15:0] == 16'd0) ||
                              (cmd_fp && dg_addr[15:0] == station_addr) || cmd_b;
             end
             if (dg_hdr_done) begin
                 ok <= addressed && fits;
+                if (cmd_l && dg_len != 11'd0) lg_go <= 1'b1;
                 if (addressed && fits && is_rd && dg_len != 11'd0) begin
                     pf_go   <= 1'b1;
                     pf_addr <= ado;
@@ -141,16 +182,20 @@ module dgram_exec #(
                         o_data <= p_data + {7'd0, carry};
                     end
                     K_DATA: begin
-                        if (ok && is_rd) o_data <= cmd_b ? (rbuf | p_data) : rbuf;
-                        if (ok && is_wr) begin
+                        if (rd_hit_i) begin
+                            o_data  <= cmd_b ? (rbuf | p_data) : rbuf;
+                            rd_seen <= 1'b1;
+                        end
+                        if (wr_hit_i) begin
                             mem_req   <= 1'b1;
                             mem_we    <= 1'b1;
-                            mem_addr  <= ado + {5'd0, p_pos};
+                            mem_addr  <= wr_addr_i;
                             mem_wdata <= p_data;
+                            wr_seen   <= 1'b1;
                         end
-                        if (ok && is_rd && ({1'b0, next_off[10:0]} < {1'b0, dg_len})) begin
+                        if (rd_hit_n && (next_off < dg_len)) begin
                             pf_go   <= 1'b1;
-                            pf_addr <= ado + next_off;
+                            pf_addr <= rd_addr_n;
                         end
                     end
                     K_WKC: if (p_pos == 11'd0) begin
@@ -159,7 +204,7 @@ module dgram_exec #(
                     end else begin
                         o_data       <= p_data + {7'd0, carry};
                         ev_dg        <= 1'b1;
-                        ev_addressed <= addressed;
+                        ev_addressed <= cmd_l ? (rd_seen || wr_seen) : addressed;
                         ev_wkc_inc   <= inc;
                     end
                     default: ;

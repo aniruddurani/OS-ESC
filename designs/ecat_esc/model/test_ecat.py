@@ -191,6 +191,19 @@ class LogicalTest(unittest.TestCase):
         self.assertEqual(out.data, b"\x00\x00\x01\x02\x03\x04\x00\x00")
         self.assertEqual(out.wkc, 1)
 
+    def test_overlapping_fmmus_first_one_wins_per_byte(self):
+        # Ruling (Task 9): where same-direction windows overlap, the lowest-numbered
+        # FMMU owns the byte. A real master never overlaps them; this just pins
+        # the behaviour so the RTL and the model agree.
+        s = SlaveModel(ram_bytes=64)
+        set_fmmu(s, 0, logical=0x100, length=4, physical=0x1000, rd=True)
+        set_fmmu(s, 1, logical=0x102, length=4, physical=0x1010, rd=True)
+        s.ram[0:4] = b"\x01\x02\x03\x04"
+        s.ram[0x10:0x14] = b"\x09\x08\x07\x06"
+        out = run(s, [Datagram(CMD["LRD"], 1, 0x100, bytes(6))])[0]
+        self.assertEqual(out.data, b"\x01\x02\x03\x04\x07\x06")
+        self.assertEqual(out.wkc, 1)
+
     def test_fmmu_window_beyond_ram_fails(self):
         s = SlaveModel(ram_bytes=8)
         set_fmmu(s, 0, logical=0x100, length=4, physical=0x1000 + 6, rd=True)

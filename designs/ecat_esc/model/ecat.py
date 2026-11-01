@@ -210,6 +210,7 @@ class SlaveModel:
                         write_hit = True
         else:
             hit_any = False
+            took_r, took_w = [False] * n, [False] * n   # lowest FMMU owns each byte
             for i in range(self.n_fmmu):
                 base = FMMU_BASE + FMMU_SIZE * i
                 start, length, _sb, _eb, phys, _pb, ftype, act = \
@@ -222,10 +223,16 @@ class SlaveModel:
                     continue
                 a, b = lo - dg.address, hi - dg.address
                 if reads and ftype & 1:
-                    data[a:b] = self._read(span, hi - lo)
+                    chunk = self._read(span, hi - lo)
+                    for k in range(a, b):
+                        if not took_r[k]:
+                            data[k], took_r[k] = chunk[k - a], True
                     read_hit = hit_any = True
                 if writes and ftype & 2:
-                    self._write(span, dg.data[a:b])
+                    for k in range(a, b):
+                        if not took_w[k]:
+                            self._write((span[0], span[1] + k - a), dg.data[k:k + 1])
+                            took_w[k] = True
                     write_hit = hit_any = True
             if hit_any:
                 c.datagrams_addressed += 1

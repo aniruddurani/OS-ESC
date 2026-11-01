@@ -88,6 +88,21 @@ module esc_core #(
     assign mem_rvalid = rf_rvalid || pd_rvalid;
     assign mem_rdata  = rf_rvalid ? rf_rdata : pd_rdata;
 
+    // --- FMMUs (logical addressing) -------------------------------------------
+    wire        fm_calc, fm_q0_rd_hit, fm_q0_wr_hit, fm_q1_rd_hit;
+    wire [10:0] fm_q0_off, fm_q1_off;
+    wire [15:0] fm_q0_wr_addr, fm_q1_rd_addr;
+    wire        is_rd_l = (dg_cmd == 8'd10) || (dg_cmd == 8'd12);
+    wire        is_wr_l = (dg_cmd == 8'd11) || (dg_cmd == 8'd12);
+
+    fmmu #(.N_FMMU(N_FMMU), .RAM_BYTES(RAM_BYTES)) u_fmmu (
+        .clk(clk), .rst(rst), .cfg(fmmu_cfg),
+        .calc(fm_calc), .dg_addr(dg_addr), .dg_len(dg_len), .is_rd(is_rd_l), .is_wr(is_wr_l),
+        .q0_off(fm_q0_off), .q0_rd_hit(fm_q0_rd_hit),
+        .q0_wr_hit(fm_q0_wr_hit), .q0_wr_addr(fm_q0_wr_addr),
+        .q1_off(fm_q1_off), .q1_rd_hit(fm_q1_rd_hit), .q1_rd_addr(fm_q1_rd_addr)
+    );
+
     // --- datagram engine -----------------------------------------------------
     wire        x_valid, x_first, x_last, x_err;
     wire  [7:0] x_data;
@@ -103,6 +118,9 @@ module esc_core #(
         .station_addr(station_addr), .bad_frame(bad_frame),
         .mem_req(mem_req), .mem_we(mem_we), .mem_addr(mem_addr), .mem_wdata(mem_wdata),
         .mem_rdata(mem_rdata), .mem_rvalid(mem_rvalid),
+        .fm_calc(fm_calc), .fm_q0_off(fm_q0_off), .fm_q0_rd_hit(fm_q0_rd_hit),
+        .fm_q0_wr_hit(fm_q0_wr_hit), .fm_q0_wr_addr(fm_q0_wr_addr),
+        .fm_q1_off(fm_q1_off), .fm_q1_rd_hit(fm_q1_rd_hit), .fm_q1_rd_addr(fm_q1_rd_addr),
         .o_valid(x_valid), .o_data(x_data), .o_first(x_first), .o_last(x_last), .o_err(x_err),
         .ev_dg(ev_dg), .ev_addressed(ev_addressed), .ev_wkc_inc(ev_wkc_inc)
     );
@@ -117,6 +135,6 @@ module esc_core #(
     );
 
     wire _unused_ok = &{1'b0, p_err, dg_idx, dg_more, dg_circ, ev_end, crc_residue,
-                        crc_unused, fmmu_cfg, sm_cfg, ev_dg, ev_addressed, ev_wkc_inc,
+                        crc_unused, sm_cfg, ev_dg, ev_addressed, ev_wkc_inc,
                         tag_unused};
 endmodule
