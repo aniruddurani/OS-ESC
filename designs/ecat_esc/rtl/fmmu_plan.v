@@ -11,7 +11,8 @@
 //                           and the mapped chunk fits the registers or the RAM
 //   seg_start[11i +: 11]    first datagram byte offset in the chunk
 //   seg_end[11i +: 11]      one past the last offset in the chunk
-//   seg_phys[16i +: 16]     physical address of the chunk's first byte
+//   seg_base[16i +: 16]     physical address of offset 0 (the chunk start minus seg_start), so
+//                           the address of offset n is seg_base + n
 module fmmu_plan #(
     parameter N_FMMU    = 3,        // 0..16
     parameter RAM_BYTES = 1024
@@ -31,7 +32,7 @@ module fmmu_plan #(
     output reg [((N_FMMU == 0) ? 1 : N_FMMU)-1:0]      hw,
     output reg [11*((N_FMMU == 0) ? 1 : N_FMMU)-1:0]   seg_start,
     output reg [11*((N_FMMU == 0) ? 1 : N_FMMU)-1:0]   seg_end,
-    output reg [16*((N_FMMU == 0) ? 1 : N_FMMU)-1:0]   seg_phys
+    output reg [16*((N_FMMU == 0) ? 1 : N_FMMU)-1:0]   seg_base
 );
     localparam NF = (N_FMMU == 0) ? 1 : N_FMMU;
     localparam [31:0] RAM_TOP = 32'h0000_1000 + RAM_BYTES;
@@ -80,7 +81,7 @@ module fmmu_plan #(
             // stage 6: fits, direction
             reg        hr6, hw6;
             reg [10:0] ss6, se6;
-            reg [15:0] ph6;
+            reg [15:0] bs5, bs6;
 
             wire fits5 = (phi5 <= 17'h01000) ||
                          ((plo5 >= 17'h01000) && (phi5 >= 17'h01000) && ({15'd0, phi5} <= RAM_TOP));
@@ -126,6 +127,7 @@ module fmmu_plan #(
                 se5  <= se4;
                 plo5 <= plo4;
                 phi5 <= plo4 + {6'd0, sl4};
+                bs5  <= plo4[15:0] - {5'd0, ss4};
                 rd5  <= rd4;
                 wr5  <= wr4;
 
@@ -133,7 +135,7 @@ module fmmu_plan #(
                 hw6  <= ovl5 && fits5 && wr5;
                 ss6  <= ss5;
                 se6  <= se5;
-                ph6  <= plo5[15:0];
+                bs6  <= bs5;
             end
 
             // the segment is held from plan_done until the next plan
@@ -148,7 +150,7 @@ module fmmu_plan #(
                 if (pd[5]) begin
                     seg_start[11*g +: 11] <= ss6;
                     seg_end[11*g +: 11]   <= se6;
-                    seg_phys[16*g +: 16]  <= ph6;
+                    seg_base[16*g +: 16]  <= bs6;
                 end
             end
         end

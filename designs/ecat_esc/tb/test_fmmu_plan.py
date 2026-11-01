@@ -49,7 +49,7 @@ async def run_plan(dut, fmmus, ds, dl, is_rd, is_wr):
         if int(dut.plan_done.value) and done_at is None:
             done_at = k
             got = (int(dut.hr.value), int(dut.hw.value), int(dut.seg_start.value),
-                   int(dut.seg_end.value), int(dut.seg_phys.value))
+                   int(dut.seg_end.value), int(dut.seg_base.value))
     return done_at, got
 
 
@@ -61,7 +61,7 @@ def check(got, expect, n, label):
         if ehr or ehw:
             assert bits(s0, 11, n, i) == es0, f"{label}: seg_start[{i}]"
             assert bits(s1, 11, n, i) == es1, f"{label}: seg_end[{i}]"
-            assert bits(ph, 16, n, i) == eph, f"{label}: seg_phys[{i}]"
+            assert bits(ph, 16, n, i) == eph, f"{label}: seg_base[{i}]"
 
 
 @cocotb.test()
@@ -128,5 +128,5 @@ async def test_fmmu_plan_holds_until_next_plan(dut):
     for _ in range(20):
         await RisingEdge(dut.clk)
         got = (int(dut.hr.value), int(dut.hw.value), int(dut.seg_start.value),
-               int(dut.seg_end.value), int(dut.seg_phys.value))
+               int(dut.seg_end.value), int(dut.seg_base.value))
         check(got, expect, N_FMMU, "hold")

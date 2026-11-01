@@ -78,3 +78,6 @@ test_physical_first_byte_margin_7
 test_fmmu_plan_matches_reference
 test_fmmu_plan_edges
 test_fmmu_plan_holds_until_next_plan
+test_fmmu_walk_matches_reference
+test_fmmu_walk_throughput
+test_fmmu_walk_lowest_number_wins

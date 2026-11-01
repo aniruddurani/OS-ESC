@@ -23,7 +23,7 @@ def pack_cfg(fmmus):
 
 
 def plan_one(f, ds, dl, is_rd, is_wr, ram_bytes):
-    """-> (hr, hw, seg_start, seg_end, seg_phys); segment fields only mean something
+    """-> (hr, hw, seg_start, seg_end, seg_base); segment fields only mean something
     when hr or hw is set."""
     ws = f["start"]
     we = ws + f["len"]
@@ -40,7 +40,7 @@ def plan_one(f, ds, dl, is_rd, is_wr, ram_bytes):
     hr = ovl and fits and bool(f["rd"]) and is_rd
     hw = ovl and fits and bool(f["wr"]) and is_wr
     seg_start = (lo - ds) & 0x7FF
-    return hr, hw, seg_start, (seg_start + cl) & 0x7FF, plo & 0xFFFF
+    return hr, hw, seg_start, (seg_start + cl) & 0x7FF, (plo - seg_start) & 0xFFFF
 
 
 def plan(fmmus, ds, dl, is_rd, is_wr, ram_bytes):
@@ -53,9 +53,9 @@ def walk(segs, n):
     out = []
     for want in (0, 1):
         hit, addr = False, 0
-        for hr, hw, s0, s1, ph in segs:
+        for hr, hw, s0, s1, ph in segs:      # ph is seg_base
             if (hr, hw)[want] and s0 <= n < s1:
-                hit, addr = True, (ph + (n - s0)) & 0xFFFF
+                hit, addr = True, (ph + n) & 0xFFFF
                 break
         out += [hit, addr]
     return tuple(out)
