@@ -1,3 +1,9 @@
+# OS-ESC
+Open Source ESC (EtherCAT Slave Controller) to beat every ESC the industry uses.
+
+This repository is the silicon-flow design flow (below), which the EtherCAT slave
+controller in `designs/ecat_esc` is built with.
+
 # silicon-flow
 
 An open-source IC design flow (sky130A). One command, `./flow all`,
