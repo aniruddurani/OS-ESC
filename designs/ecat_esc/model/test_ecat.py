@@ -234,6 +234,9 @@ class FrameValidityTest(unittest.TestCase):
         self.assertFalse(fcs_ok(out))
         self.assertEqual(s.station_address, 0)                     # the bad datagram never ran
         self.assertEqual(s.counters.malformed, 1)
+        # Cut-through: the position field of an auto-increment datagram has already
+        # been incremented when its bad length is seen.
+        self.assertEqual(out[16 + 2], 1)
 
     def test_ethercat_length_disagreeing_with_frame_is_poisoned(self):
         s = SlaveModel()
@@ -295,6 +298,20 @@ class FrameValidityTest(unittest.TestCase):
         c = s.counters
         self.assertEqual((c.frames, c.datagrams, c.datagrams_addressed, c.wkc_increments),
                          (1, 2, 1, 1))
+
+    def test_trace_records_each_datagram(self):
+        # (cmd, original address, length, wkc increment, addressed): what diag logs.
+        s = SlaveModel()
+        run(s, [Datagram(CMD["APRD"], 1, adp_ado(0, 0x0004), b"\x00", more=True),
+                Datagram(CMD["FPRD"], 2, adp_ado(0x7777, 0x0004), b"\x00\x00")])
+        self.assertEqual(s.trace, [(CMD["APRD"], adp_ado(0, 0x0004), 1, 1, True),
+                                   (CMD["FPRD"], adp_ado(0x7777, 0x0004), 2, 0, False)])
+
+    def test_rx_err_flag_counts_and_poisons(self):
+        s = SlaveModel()
+        out = s.process(build_frame([Datagram(CMD["NOP"], 1, 0, b"\x00")]), rx_err=True)
+        self.assertEqual(s.counters.rx_errors, 1)
+        self.assertFalse(fcs_ok(out))
 
     def test_frame_roundtrip(self):
         dgs = [Datagram(CMD["LRW"], 9, 0x12345678, bytes(range(10)), irq=0x0102, more=True, wkc=3),

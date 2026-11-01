@@ -41,14 +41,14 @@ async def start(dut, seed, n_fmmu=3):
 
 async def exchange(drv, mon, model, frame, err=0):
     """Send `frame` through the DUT and the model; check the outputs agree."""
-    expected = model.process(frame)
+    expected = model.process(frame, rx_err=bool(err))
     before = len(mon.frames)
     await drv.send(frame, err=err)
     await drv.idle(200)
     assert len(mon.frames) == before + 1, "the core must emit exactly one frame per input frame"
     body, poison = mon.frames[-1]
     assert body == expected[:-4], "output bytes differ from the model"
-    assert poison == (0 if fcs_ok(expected) else 1) or err, "poison flag differs from the model"
+    assert poison == (0 if fcs_ok(expected) else 1), "poison flag differs from the model"
     return body, poison
 
 

@@ -6,7 +6,10 @@
 module esc_core #(
     parameter N_FMMU    = 3,
     parameter N_SM      = 4,
-    parameter RAM_BYTES = 1024
+    parameter RAM_BYTES = 1024,
+    parameter DIAG_EN   = 1,        // 0 builds the core without the diag block
+    parameter TRACE_DEPTH = 8,
+    parameter CNT_W     = 16
 ) (
     input        clk,
     input        rst,
@@ -64,6 +67,7 @@ module esc_core #(
     wire [15:0] mem_addr;
     wire  [7:0] mem_wdata, mem_rdata;
     wire        hi = |mem_addr[15:12];
+    wire        diag_sel = (DIAG_EN != 0) && (mem_addr[15:8] == 8'h0E);   // 0x0E00..0x0EFF
 
     wire  [7:0] rf_rdata, pd_rdata;
     wire        rf_rvalid, pd_rvalid;
@@ -73,7 +77,7 @@ module esc_core #(
 
     regfile #(.N_FMMU(N_FMMU), .N_SM(N_SM), .RAM_BYTES(RAM_BYTES)) u_regfile (
         .clk(clk), .rst(rst),
-        .mem_req(mem_req && !hi), .mem_we(mem_we), .mem_addr(mem_addr), .mem_wdata(mem_wdata),
+        .mem_req(mem_req && !hi && !diag_sel), .mem_we(mem_we), .mem_addr(mem_addr), .mem_wdata(mem_wdata),
         .mem_rdata(rf_rdata), .mem_rvalid(rf_rvalid),
         .dl_status(16'd0),
         .station_addr(station_addr), .fmmu_cfg(fmmu_cfg), .sm_cfg(sm_cfg)
@@ -85,8 +89,11 @@ module esc_core #(
         .mem_rdata(pd_rdata), .mem_rvalid(pd_rvalid)
     );
 
-    assign mem_rvalid = rf_rvalid || pd_rvalid;
-    assign mem_rdata  = rf_rvalid ? rf_rdata : pd_rdata;
+    wire  [7:0] dg_rdata;
+    wire        dg_rvalid;
+
+    assign mem_rvalid = rf_rvalid || pd_rvalid || dg_rvalid;
+    assign mem_rdata  = rf_rvalid ? rf_rdata : (pd_rvalid ? pd_rdata : dg_rdata);
 
     // --- FMMUs (logical addressing) -------------------------------------------
     wire        fm_calc, fm_q0_rd_hit, fm_q0_wr_hit, fm_q1_rd_hit;
@@ -124,6 +131,26 @@ module esc_core #(
         .o_valid(x_valid), .o_data(x_data), .o_first(x_first), .o_last(x_last), .o_err(x_err),
         .ev_dg(ev_dg), .ev_addressed(ev_addressed), .ev_wkc_inc(ev_wkc_inc)
     );
+
+    // --- diagnostics (read-only watcher) ---------------------------------------
+    generate
+        if (DIAG_EN != 0) begin : g_diag
+            diag #(.TRACE_DEPTH(TRACE_DEPTH), .CNT_W(CNT_W)) u_diag (
+                .clk(clk), .rst(rst),
+                .in_first_seen(in_valid && in_first), .out_first_seen(out_valid && out_first),
+                .ev_end(ev_end), .ev_runt(ev_runt), .ev_oversize(ev_oversize),
+                .ev_non_ethercat(ev_non_ethercat), .ev_malformed(ev_malformed),
+                .ev_rx_err(ev_rx_err), .ev_crc_bad(ev_end && !crc_residue_next),
+                .ev_dg(ev_dg), .ev_addressed(ev_addressed), .ev_wkc_inc(ev_wkc_inc),
+                .dg_cmd(dg_cmd), .dg_addr(dg_addr), .dg_len(dg_len),
+                .mem_req(mem_req && diag_sel), .mem_we(mem_we), .mem_addr(mem_addr[7:0]),
+                .mem_rdata(dg_rdata), .mem_rvalid(dg_rvalid)
+            );
+        end else begin : g_nodiag
+            assign dg_rdata  = 8'h00;
+            assign dg_rvalid = 1'b0;
+        end
+    endgenerate
 
     // --- drop the received FCS (the transmitter writes a new one) ------------
     wire tag_unused;

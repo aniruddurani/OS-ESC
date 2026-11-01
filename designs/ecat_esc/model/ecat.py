@@ -75,35 +75,38 @@ def build_frame(datagrams, dst=b"\xff" * 6, src=DEFAULT_SRC, with_fcs=True):
 
 
 def _walk_partial(raw):
-    """([(position, Datagram)], malformed): the datagrams that fit, in order, and
-    whether the structure is broken. Mirrors rtl/frame_parse.v, which sees the FCS
+    """([(position, Datagram)], malformed, bad_pos): the datagrams that fit, in order,
+    whether the structure is broken, and where the datagram that did not fit starts
+    (None if the break is not inside a datagram). Mirrors rtl/frame_parse.v, which sees the FCS
     and padding bytes as frame bytes too: the EtherCAT length must be at least one
     datagram (12 bytes), each datagram must fit what is left of that length, and
     the frame must not end inside a header or datagram."""
     word, = struct.unpack_from("<H", raw, 14)
     length, ptype = word & 0x7FF, word >> 12
     if ptype != 1 or length < 12:
-        return [], True
+        return [], True, None
     out, pos, remain = [], 16, length
     while remain:
-        if remain < 12 or pos + 10 > len(raw):
-            return out, True
+        if remain < 12:
+            return out, True, None
+        if pos + 10 > len(raw):
+            return out, True, pos
         cmd, idx, addr, lw, irq = struct.unpack_from("<BBIHH", raw, pos)
         n = lw & 0x7FF
         if remain - 10 < n + 2 or pos + 10 + n + 2 > len(raw):
-            return out, True
+            return out, True, pos
         data = bytes(raw[pos + 10:pos + 10 + n])
         wkc, = struct.unpack_from("<H", raw, pos + 10 + n)
         out.append((pos, Datagram(cmd, idx, addr, data, irq, bool(lw & 0x8000),
                                   bool(lw & 0x4000), wkc)))
         pos += 12 + n
         remain -= 12 + n
-    return out, False
+    return out, False, None
 
 
 def _walk(raw):
     """Datagrams of a well-formed frame; FrameError if the structure is broken."""
-    items, malformed = _walk_partial(raw)
+    items, malformed, _ = _walk_partial(raw)
     if malformed:
         raise FrameError("EtherCAT header or datagrams disagree with the frame")
     return [d for _, d in items]
@@ -125,6 +128,8 @@ class SlaveModel:
         self.regs = bytearray(REG_SPACE)
         self.ram = bytearray(ram_bytes)
         self.counters = Counters()
+        # (cmd, original address, length, wkc increment, addressed) per datagram
+        self.trace = []
         # Identification mirrors an ET1100-class ESC (verify): type, revision.
         self.regs[0x0000], self.regs[0x0001] = 0x11, 0x02
         self.regs[0x0004], self.regs[0x0005] = n_fmmu, n_sm
@@ -177,7 +182,9 @@ class SlaveModel:
         name = NAME.get(dg.cmd, "NOP")
         out = replace(dg)
         if name == "NOP":
+            self.trace.append((dg.cmd, dg.address, len(dg.data), 0, False))
             return out
+        addressed_here = False
         op = name[-2:]
         reads, writes = op in ("RD", "RW"), op in ("WR", "RW")
         read_hit = write_hit = False
@@ -197,6 +204,7 @@ class SlaveModel:
                 out.address = (dg.address & 0xFFFF0000) | ((adp + 1) & 0xFFFF)
             if addressed:
                 c.datagrams_addressed += 1
+                addressed_here = True
                 span = self._span(ado, n)
                 if span is not None:
                     old = self._read(span, n)
@@ -236,15 +244,17 @@ class SlaveModel:
                     write_hit = hit_any = True
             if hit_any:
                 c.datagrams_addressed += 1
+                addressed_here = True
 
         inc = (1 if read_hit else 0) + ((2 if reads and writes else 1) if write_hit else 0)
         c.wkc_increments += inc
         out.data = bytes(data)
         out.wkc = (dg.wkc + inc) & 0xFFFF
+        self.trace.append((dg.cmd, dg.address, len(dg.data), inc, addressed_here))
         return out
 
     # --- frame ----------------------------------------------------------
-    def process(self, raw):
+    def process(self, raw, rx_err=False):
         """The frame as this ESC sends it on, FCS included, or None when the input
         is too short (under 5 bytes) to produce any output.
 
@@ -259,6 +269,9 @@ class SlaveModel:
             c.runts += 1
             return None
         poison = False
+        if rx_err:                       # the MII receiver flagged this frame
+            c.rx_errors += 1
+            poison = True
         if len(raw) < MIN_FRAME:
             c.runts += 1
             poison = True
@@ -274,10 +287,17 @@ class SlaveModel:
                 c.non_ethercat += 1
                 poison = True
             else:
-                items, malformed = _walk_partial(raw) if len(raw) >= 16 else ([], True)
+                items, malformed, bad_pos = (_walk_partial(raw) if len(raw) >= 16
+                                             else ([], True, None))
                 if malformed:
                     c.malformed += 1
                     poison = True
+                    # The position field of an auto-increment or broadcast datagram
+                    # is incremented as it passes, before its bad length is seen.
+                    if (bad_pos is not None and len(raw) - bad_pos >= 4
+                            and NAME.get(raw[bad_pos], "NOP")[0] in "AB"):
+                        adp = struct.unpack_from("<H", body, bad_pos + 2)[0]
+                        struct.pack_into("<H", body, bad_pos + 2, (adp + 1) & 0xFFFF)
                 for pos, dg in items:
                     o = self._execute(dg)
                     word = len(o.data) | (0x4000 if o.circ else 0) | (0x8000 if o.more else 0)

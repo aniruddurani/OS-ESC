@@ -28,6 +28,9 @@ TESTS = {
     "test_dgram": "esc_core",
     "test_logical": "esc_core",
     "test_fmmu0": "esc_core",
+    "test_diag": "esc_core",
+    "test_diag_sat": "esc_core",
+    "test_diag_pair": "core_pair",
 }
 
 
@@ -36,6 +39,8 @@ PARAMS = {
     "test_dgram": {"RAM_BYTES": 256},
     "test_logical": {"RAM_BYTES": 256},
     "test_fmmu0": {"RAM_BYTES": 256, "N_FMMU": 0},
+    "test_diag": {"RAM_BYTES": 256},
+    "test_diag_sat": {"RAM_BYTES": 256, "CNT_W": 3},
 }
 
 
