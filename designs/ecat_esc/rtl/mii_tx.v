@@ -30,6 +30,7 @@ module mii_tx (
 
     wire [31:0] crc;
     wire        crc_residue;
+    wire        crc_residue_next;
     wire        pre_last = (state == PRE) && (cnt == 5'd15);
 
     assign ready = pre_last || ((state == DATA) && phase && !last_flag);
@@ -40,9 +41,10 @@ module mii_tx (
         .valid(ready && valid),
         .data(data),
         .crc(crc),
-        .residue_ok(crc_residue)
+        .residue_ok(crc_residue),
+        .residue_next(crc_residue_next)
     );
-    wire _unused_ok = &{1'b0, crc_residue};
+    wire _unused_ok = &{1'b0, crc_residue, crc_residue_next};
 
     wire [31:0] fcs_out = bad ? ~fcs : fcs;
     wire [3:0]  fcs_nib = fcs_out[{cnt[2:0], 2'b00} +: 4];

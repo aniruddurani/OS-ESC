@@ -99,8 +99,13 @@ standard. The working counter increments only on a successful access, by the
 per-command rules in the standard. The exact increments are checked against the
 captures. The FCS is regenerated after modification.
 
-The write path has one commit strobe so the policy for writes in a frame whose
-FCS proves bad is a local change (see open items).
+Bad frames (decided in Task 8): the datapath is cut-through, so writes land as
+the bytes pass and cannot be held until the FCS is known. A frame that proves
+bad (wrong FCS, runt, oversize, not EtherCAT, malformed, or flagged by the
+receiver) is forwarded with a deliberately inverted FCS so the next device and
+the master discard it, and `diag` counts the cause. Datagrams completed before
+a malformation have already run. This replaces the single-commit-strobe idea;
+a staging variant remains possible if the standard or captures require it.
 
 ## 7. Registers (initial subset)
 
@@ -185,10 +190,12 @@ or generated files without approval; tapeout steps are never marked done.
   per-device royalty. Whether a from-scratch ESC-compatible chip needs a
   licence is unresolved and must be checked before any fabrication. A private
   learning design in simulation and layout is a different matter from a product.
-- **FCS-bad policy.** What a real slave does with writes in a frame whose FCS
-  proves bad is unknown; decided from captures and the standard.
-- **Non-EtherCAT frames.** Assumed dropped and counted; a real ESC may forward
-  them; confirm from captures.
+- **FCS-bad policy.** Implemented as cut-through with a poisoned FCS (section
+  6). What a real slave does with writes in a frame whose FCS proves bad is
+  still unverified; check against the standard and captures.
+- **Non-EtherCAT frames.** Forwarded with a poisoned FCS (so effectively
+  dropped on the wire) and counted; a real ESC may forward them unchanged;
+  confirm from captures.
 - **Captures.** Needed from the user; until then results are labelled
   unverified.
 - **Timing at 100 MHz** on sky130 is a target, not a promise.

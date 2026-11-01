@@ -58,6 +58,25 @@ async def test_residue_ok_with_fcs(dut):
 
 
 @cocotb.test()
+async def test_residue_next_is_combinational(dut):
+    # residue_next says whether feeding the byte on `data` right now would end the
+    # frame with a good FCS, one cycle before residue_ok can.
+    await start(dut)
+    frame = random_frame(random.Random(4), 70)
+    full = frame + zlib.crc32(frame).to_bytes(4, "little")
+    await feed(dut, full[:-1])
+    dut.data.value = full[-1]
+    dut.valid.value = 0
+    await RisingEdge(dut.clk)
+    await RisingEdge(dut.clk)
+    assert int(dut.residue_next.value) == 1
+    dut.data.value = full[-1] ^ 0x01
+    await RisingEdge(dut.clk)
+    await RisingEdge(dut.clk)
+    assert int(dut.residue_next.value) == 0
+
+
+@cocotb.test()
 async def test_residue_bad_with_corrupt_fcs(dut):
     await start(dut)
     frame = random_frame(random.Random(3), 80)

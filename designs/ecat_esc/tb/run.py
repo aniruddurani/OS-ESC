@@ -25,6 +25,13 @@ TESTS = {
     "test_parse": "frame_parse",
     "test_delay": "delay_line",
     "test_regfile": "regfile",
+    "test_dgram": "esc_core",
+}
+
+
+# Verilog parameters per test module (the test files state the values they assume).
+PARAMS = {
+    "test_dgram": {"RAM_BYTES": 256},
 }
 
 
@@ -35,6 +42,7 @@ def run_one(module, top, rtl_dir, build):
     runner.build(sources=sources, hdl_toplevel=top,
                  build_dir=os.path.join(build, top),
                  build_args=["--timing", "-Wno-fatal", "-Wno-lint", "-Wno-style"],
+                 parameters=PARAMS.get(module, {}),
                  always=True)
     return runner.test(hdl_toplevel=top, test_module=module, test_dir=TB_DIR,
                        build_dir=os.path.join(build, top),

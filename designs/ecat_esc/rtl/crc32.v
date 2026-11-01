@@ -12,7 +12,8 @@ module crc32 (
     input         valid,
     input  [7:0]  data,
     output [31:0] crc,
-    output        residue_ok
+    output        residue_ok,
+    output        residue_next
 );
     reg [31:0] r;
 
@@ -36,4 +37,6 @@ module crc32 (
 
     assign crc        = ~r;
     assign residue_ok = (r == 32'hDEBB20E3);
+    // Would the frame end with a good FCS if `data` were consumed now?
+    assign residue_next = (step(r, data) == 32'hDEBB20E3);
 endmodule
