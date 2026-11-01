@@ -1,4 +1,4 @@
-// Datagram engine, physical addressing (logical addressing is added with the FMMUs).
+// Datagram engine: physical and logical addressing.
 //
 // Sits on the parser's tagged byte stream and rewrites it one byte per input
 // byte, one clock later. The decision for a datagram is made early:
@@ -9,7 +9,7 @@
 // then each data byte is read from or written to memory on the byte-wide
 // memory port as it passes (cut-through; see the ledger ruling on bad frames).
 // Reads are prefetched one byte ahead so the byte is ready when it arrives:
-// the design assumes at least 5 core clocks between stream bytes (a line-rate
+// the design assumes at least 6 core clocks between stream bytes (a line-rate
 // byte is 8 clocks at 100 MHz).
 //
 // Working counter: read +1, write +1, read-write +3 (read +1, write +2), added
@@ -18,6 +18,7 @@
 // `bad_frame` is sampled with the last byte of a frame and becomes the stream's
 // `err` flag, which poisons the transmitted FCS.
 module dgram_exec #(
+    parameter N_FMMU    = 3,        // 0..16
     parameter RAM_BYTES = 1024
 ) (
     input             clk,
@@ -51,16 +52,8 @@ module dgram_exec #(
     output reg        o_last,
     output reg        o_err,
 
-    // FMMU interface (logical commands): calc pulses when the length is known;
-    // q0 answers for the current byte, q1 for the byte to prefetch.
-    output            fm_calc,
-    output     [10:0] fm_q0_off,
-    input             fm_q0_rd_hit,
-    input             fm_q0_wr_hit,
-    input      [15:0] fm_q0_wr_addr,
-    output     [10:0] fm_q1_off,
-    input             fm_q1_rd_hit,
-    input      [15:0] fm_q1_rd_addr,
+    // the FMMU configuration (logical commands), 16 bytes per FMMU
+    input  [8*16*((N_FMMU == 0) ? 1 : N_FMMU)-1:0] fmmu_cfg,
 
     output reg        ev_dg,          // a datagram finished (its WKC passed)
     output reg        ev_addressed,   // ... and this slave was addressed by it
@@ -108,23 +101,39 @@ module dgram_exec #(
     reg [15:0] wctr;            // physical commands: address of the data byte now passing
     reg [15:0] rctr;            // physical commands: address of the next byte to prefetch
 
-    reg        lg_go;           // logical: prefetch byte 0 one clock after hdr_done
     reg        rd_seen, wr_seen;
 
     wire rd_ok  = cmd_l ? rd_seen : (ok && is_rd);
     wire wr_ok  = cmd_l ? wr_seen : (ok && is_wr);
     wire [1:0] inc = {1'b0, rd_ok} + (wr_ok ? (is_rd ? 2'd2 : 2'd1) : 2'd0);
 
-    // this byte / the next byte: does it read or write, and where
-    wire        rd_hit_i = cmd_l ? fm_q0_rd_hit : (ok && is_rd);
-    wire        wr_hit_i = cmd_l ? fm_q0_wr_hit : (ok && is_wr);
-    wire [15:0] wr_addr_i = cmd_l ? fm_q0_wr_addr : wctr;
-    wire        rd_hit_n = cmd_l ? fm_q1_rd_hit : (ok && is_rd);
-    wire [15:0] rd_addr_n = cmd_l ? fm_q1_rd_addr : rctr;
+    // Logical commands: the access queue plans the datagram over the FMMUs, walks the
+    // offsets ahead of the stream and fetches the read bytes; it gets the memory port
+    // whenever a write is not using it.
+    wire        acc_rd_req, acc_rd_hit, acc_wr_hit;
+    wire [15:0] acc_rd_addr, acc_wr_addr;
+    wire  [7:0] acc_rd_data;
+    wire        data_now = p_valid && (p_kind == K_DATA) && cmd_l;
+    wire        acc_ack  = acc_rd_req && !(data_now && acc_wr_hit);
 
-    assign fm_calc   = dg_len_done && cmd_l;
-    assign fm_q0_off = p_pos;
-    assign fm_q1_off = lg_go ? 11'd0 : p_pos + 11'd1;
+    dg_access #(.N_FMMU(N_FMMU), .RAM_BYTES(RAM_BYTES)) u_acc (
+        .clk(clk), .rst(rst), .cfg(fmmu_cfg),
+        .flush(dg_start), .plan_len(dg_len_done && cmd_l),
+        .dg_addr(dg_addr), .dg_len(dg_len), .is_rd(is_rd), .is_wr(is_wr),
+        .rd_req(acc_rd_req), .rd_req_addr(acc_rd_addr), .rd_ack(acc_ack),
+        .mem_rvalid(mem_rvalid), .mem_rdata(mem_rdata),
+        .consume(data_now),
+        .head_rd_hit(acc_rd_hit), .head_rd_data(acc_rd_data),
+        .head_wr_hit(acc_wr_hit), .head_wr_addr(acc_wr_addr)
+    );
+
+    // this byte: does it read or write, and where (physical commands: the command and the
+    // address counters; logical: the head of the access queue)
+    wire        rd_hit_i  = cmd_l ? acc_rd_hit : (ok && is_rd);
+    wire        wr_hit_i  = cmd_l ? acc_wr_hit : (ok && is_wr);
+    wire [15:0] wr_addr_i = cmd_l ? acc_wr_addr : wctr;
+    wire        rd_hit_n  = ok && is_rd;         // physical: prefetch the next byte
+    wire [15:0] rd_addr_n = rctr;
     wire [8:0] wsum = {1'b0, p_data} + {7'd0, inc};
 
     wire [10:0] next_off = p_pos + 11'd1;
@@ -133,7 +142,6 @@ module dgram_exec #(
         mem_req      <= 1'b0;
         mem_we       <= 1'b0;
         pf_go        <= 1'b0;
-        lg_go        <= 1'b0;
         o_valid      <= 1'b0;
         o_first      <= 1'b0;
         o_last       <= 1'b0;
@@ -163,9 +171,10 @@ module dgram_exec #(
                 mem_addr <= pf_addr;
             end
 
-            if (lg_go && fm_q1_rd_hit) begin       // logical: prefetch byte 0
-                pf_go   <= 1'b1;
-                pf_addr <= fm_q1_rd_addr;
+
+            if (acc_ack) begin                     // logical: the next queued read
+                mem_req  <= 1'b1;
+                mem_addr <= acc_rd_addr;
             end
 
             if (dg_start) begin
@@ -175,7 +184,6 @@ module dgram_exec #(
                 addressed <= (cmd_ap && dg_addr[15:0] == 16'd0) ||
                              (cmd_fp && dg_addr[15:0] == station_addr) || cmd_b;
             end
-            if (dg_len_done && cmd_l && dg_len != 11'd0) lg_go <= 1'b1;
             if (len_d[2] && addressed && fits_r && is_rd && dg_len != 11'd0) begin
                 pf_go   <= 1'b1;                   // physical: start the first read early
                 pf_addr <= ado;
@@ -200,7 +208,7 @@ module dgram_exec #(
                     end
                     K_DATA: begin
                         if (rd_hit_i) begin
-                            o_data  <= cmd_b ? (rbuf | p_data) : rbuf;
+                            o_data  <= cmd_b ? (rbuf | p_data) : (cmd_l ? acc_rd_data : rbuf);
                             rd_seen <= 1'b1;
                         end
                         if (wr_hit_i) begin
