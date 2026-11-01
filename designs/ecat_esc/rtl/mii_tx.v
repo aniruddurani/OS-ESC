@@ -2,7 +2,7 @@
 //
 // A frame starts when `valid` and `first` are seen while idle. The block sends
 // 7 x 0x55 + SFD 0xD5, then the bytes, then the CRC-32 (low byte first), then a
-// 12-byte inter-frame gap. `ready` is high in the cycle a byte may be taken
+// 12-byte inter-frame gap. `err` raised with a frame's last byte inverts its FCS. `ready` is high in the cycle a byte may be taken
 // (valid && ready); the sender must hold `valid` until then. If a byte is not
 // there when needed the frame is finished with an inverted FCS and `underrun`
 // stays high until the next frame starts.
@@ -13,6 +13,7 @@ module mii_tx (
     input      [7:0] data,
     input            first,
     input            last,
+    input            err,       // with `last`: send this frame with a wrong FCS
     output           ready,
     output           tx_en,
     output     [3:0] txd,
@@ -32,12 +33,14 @@ module mii_tx (
     wire        crc_residue;
     wire        crc_residue_next;
     wire        pre_last = (state == PRE) && (cnt == 5'd15);
+    // a frame starts from idle, or straight from the end of the gap if one is waiting
+    wire        start    = valid && first && ((state == IDLE) || ((state == IFG) && (cnt == 5'd23)));
 
     assign ready = pre_last || ((state == DATA) && phase && !last_flag);
 
     crc32 u_crc (
         .clk(tx_clk), .rst(rst),
-        .init((state == IDLE) && valid && first),
+        .init(start),
         .valid(ready && valid),
         .data(data),
         .crc(crc),
@@ -66,7 +69,7 @@ module mii_tx (
             underrun  <= 1'b0;
         end else begin
             case (state)
-                IDLE: if (valid && first) begin
+                IDLE: if (start) begin
                     state    <= PRE;
                     cnt      <= 5'd0;
                     bad      <= 1'b0;
@@ -77,6 +80,7 @@ module mii_tx (
                         if (valid) begin
                             cur       <= data;
                             last_flag <= last;
+                            if (last && err) bad <= 1'b1;
                             phase     <= 1'b0;
                             state     <= DATA;
                         end else begin
@@ -102,6 +106,7 @@ module mii_tx (
                         end else if (valid) begin
                             cur       <= data;
                             last_flag <= last;
+                            if (last && err) bad <= 1'b1;
                         end else begin
                             underrun <= 1'b1;
                             bad      <= 1'b1;
@@ -120,8 +125,16 @@ module mii_tx (
                     end
                 end
                 default: begin   // IFG: 24 nibble times with tx_en low
-                    if (cnt == 5'd23) state <= IDLE;
-                    else cnt <= cnt + 5'd1;
+                    if (start) begin
+                        state    <= PRE;
+                        cnt      <= 5'd0;
+                        bad      <= 1'b0;
+                        underrun <= 1'b0;
+                    end else if (cnt == 5'd23) begin
+                        state <= IDLE;
+                    end else begin
+                        cnt <= cnt + 5'd1;
+                    end
                 end
             endcase
         end

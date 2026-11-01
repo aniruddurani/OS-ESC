@@ -31,6 +31,8 @@ TESTS = {
     "test_diag": "esc_core",
     "test_diag_sat": "esc_core",
     "test_diag_pair": "core_pair",
+    "test_top": "esc_top",
+    "test_replay": "esc_top",
 }
 
 
@@ -41,6 +43,8 @@ PARAMS = {
     "test_fmmu0": {"RAM_BYTES": 256, "N_FMMU": 0},
     "test_diag": {"RAM_BYTES": 256},
     "test_diag_sat": {"RAM_BYTES": 256, "CNT_W": 3},
+    "test_top": {"RAM_BYTES": 256},
+    "test_replay": {"RAM_BYTES": 256},
 }
 
 

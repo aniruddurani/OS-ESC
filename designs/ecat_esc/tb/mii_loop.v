@@ -7,6 +7,7 @@ module mii_loop (
     input  [7:0] tx_data,
     input        tx_first,
     input        tx_last,
+    input        tx_err,
     output       tx_ready,
     output       tx_en,
     output       underrun,
@@ -20,7 +21,7 @@ module mii_loop (
 
     mii_tx u_tx (
         .tx_clk(clk), .rst(rst),
-        .valid(tx_valid), .data(tx_data), .first(tx_first), .last(tx_last),
+        .valid(tx_valid), .data(tx_data), .first(tx_first), .last(tx_last), .err(tx_err),
         .ready(tx_ready), .tx_en(tx_en), .txd(txd), .underrun(underrun)
     );
 
