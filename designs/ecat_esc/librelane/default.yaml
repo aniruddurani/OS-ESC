@@ -16,3 +16,8 @@ SYNTH_PARAMETERS:
   - FIFO_DEPTH=16
 
 FP_CORE_UTIL: 35
+
+# The RAM macro as a blackbox declaration, so lint and synthesis resolve the instance in
+# pdram_macro.v (unused in this configuration).
+EXTRA_VERILOG_MODELS:
+  - dir::../tb/lint/sky130_sram_1kbyte_1rw1r_8x1024_8.v
