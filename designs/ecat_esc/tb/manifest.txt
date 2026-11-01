@@ -1,3 +1,11 @@
 test_matches_zlib
 test_residue_ok_with_fcs
 test_residue_bad_with_corrupt_fcs
+test_rx_strips_preamble
+test_rx_flags_rx_er
+test_rx_short_preamble_ignored
+test_rx_odd_nibble_count_flags_err
+test_rx_back_to_back_frames
+test_tx_appends_valid_fcs
+test_rx_tx_roundtrip_random_frames
+test_tx_inserts_interframe_gap

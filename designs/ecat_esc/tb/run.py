@@ -19,11 +19,14 @@ TB_DIR = os.path.dirname(os.path.abspath(__file__))
 # test module -> toplevel module
 TESTS = {
     "test_crc32": "crc32",
+    "test_mii_rx": "mii_rx",
+    "test_mii_loop": "mii_loop",
 }
 
 
 def run_one(module, top, rtl_dir, build):
-    sources = sorted(glob.glob(os.path.join(rtl_dir, "*.v")))
+    # RTL plus testbench-only wrappers (tb/*.v); lint covers rtl/ only.
+    sources = sorted(glob.glob(os.path.join(rtl_dir, "*.v")) + glob.glob(os.path.join(TB_DIR, "*.v")))
     runner = get_runner("verilator")
     runner.build(sources=sources, hdl_toplevel=top,
                  build_dir=os.path.join(build, top),

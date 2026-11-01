@@ -16,11 +16,15 @@ DTB_SRC  := $(wildcard $(DTB)/*.py) $(DTB)/manifest.txt
 dlint: $(DSTAMPS)/dlint.pass
 dsim: $(DSTAMPS)/dsim.pass
 
-# Verilator lint with all warnings on; the stage passes only with none.
+# Verilator lint with all warnings on; the stage passes only with none. Every
+# module is linted as its own top (a library of blocks has no single top, and
+# MULTITOP is not silenced); the log collects the output of all runs.
 $(DSTAMPS)/dlint.pass: $(DRTL) Makefile digital.mk
 	@mkdir -p $(DREPORTS) $(DLOGS) $(DSTAMPS)
 	@rm -f $@ $(DREPORTS)/dlint.json $(DLOGS)/dlint.log
-	-verilator --lint-only -Wall $(DRTL) > $(DLOGS)/dlint.log 2>&1
+	@: > $(DLOGS)/dlint.log
+	-@if [ -z "$(DRTL)" ]; then verilator --lint-only -Wall >> $(DLOGS)/dlint.log 2>&1; fi
+	-@for f in $(DRTL); do m=$$(basename $$f .v); 	  verilator --lint-only -Wall --top-module $$m $(DRTL) >> $(DLOGS)/dlint.log 2>&1; done
 	$(PY) dlint --log $(DLOGS)/dlint.log --design $(DDESIGN) --out $(DREPORTS)/dlint.json
 	@touch $@
 
