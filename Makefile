@@ -176,3 +176,5 @@ $(STAMPS)/netlist.pass: $(SCH) $(SYM) Makefile
 	  --design $(DESIGN) --out $(REPORTS)/netlist.json
 	@touch $@
 
+
+-include digital.mk

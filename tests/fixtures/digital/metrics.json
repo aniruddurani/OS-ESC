@@ -1,0 +1,14 @@
+{
+  "design__lint_error__count": 0,
+  "magic__drc_error__count": 0,
+  "klayout__drc_error__count": 0,
+  "design__lvs_error__count": 0,
+  "antenna__violating__nets": 0,
+  "route__drc_errors__iter:0": 49,
+  "timing__setup__ws": 3.9856652439898355,
+  "timing__hold__ws": 0.2539246385030463,
+  "timing__setup_vio__count": 0,
+  "timing__hold_vio__count": 0,
+  "timing__setup__ws__corner:max_ss_100C_1v60": -0.25,
+  "design__instance__area": 6277.27
+}

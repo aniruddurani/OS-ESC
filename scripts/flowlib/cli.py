@@ -8,8 +8,10 @@ import json
 import os
 import re
 import sys
+import xml.etree.ElementTree as ET
 
 from flowlib.deck import PORT_ORDER, make_deck
+from flowlib.digital import parse_cocotb_results, parse_verilator_lint, read_metrics
 from flowlib.parsers import (
     count_subckt_devices,
     drc_status,
@@ -132,6 +134,61 @@ def cmd_lvs(a):
         errors = [{"message": m} for m in result["errors"]] or [
             {"message": "Netgen did not report a unique match"}]
     return write_report(a.out, "lvs", a.design, status, {"match": result["match"]}, errors, a.log)
+
+
+def cmd_dlint(a):
+    text = _read(a.log)
+    if text is None:
+        return write_report(a.out, "dlint", a.design, "error", {},
+                            [{"message": f"lint log missing: {a.log}"}], a.log)
+    counts = parse_verilator_lint(text)
+    clean = counts["errors"] == 0 and counts["warnings"] == 0
+    errors = [] if clean else [{"message": l} for l in text.splitlines() if l.startswith("%")]
+    return write_report(a.out, "dlint", a.design, "pass" if clean else "fail", counts, errors, a.log)
+
+
+def cmd_dsim(a):
+    xml_text = _read(a.results)
+    manifest_text = _read(a.manifest)
+    if xml_text is None or manifest_text is None:
+        gone = a.results if xml_text is None else a.manifest
+        return write_report(a.out, "dsim", a.design, "error", {},
+                            [{"message": f"simulation evidence missing: {gone}"}], a.results)
+    manifest = [l.strip() for l in manifest_text.splitlines() if l.strip()]
+    if not manifest:
+        return write_report(a.out, "dsim", a.design, "error", {},
+                            [{"message": f"manifest lists no tests: {a.manifest}"}], a.results)
+    try:
+        r = parse_cocotb_results(xml_text, manifest)
+    except ET.ParseError as e:
+        return write_report(a.out, "dsim", a.design, "error", {},
+                            [{"message": f"results unreadable: {e}"}], a.results)
+    errors = [{"message": f"expected test did not run or was skipped: {n}"} for n in r["missing"]]
+    if r["failed"]:
+        errors.append({"message": f"{r['failed']} test(s) failed"})
+    status = "pass" if not errors and r["passed"] >= 1 else "fail"
+    return write_report(a.out, "dsim", a.design, status, r, errors, a.results)
+
+
+def cmd_dmetrics(a):
+    """dsynth / dpnr: every --zero metric must be 0 and every --nonneg metric
+    >= 0, read from LibreLane's metrics.json."""
+    stage = a.command
+    text = _read(a.metrics)
+    if text is None:
+        return write_report(a.out, stage, a.design, "error", {},
+                            [{"message": f"metrics file missing: {a.metrics}"}], a.metrics)
+    names = list(a.zero) + list(a.nonneg)
+    try:
+        values = read_metrics(text, names)
+    except KeyError as e:
+        return write_report(a.out, stage, a.design, "error", {},
+                            [{"message": f"metric not in metrics file: {e.args[0]}"}], a.metrics)
+    errors = [{"metric": n, "message": f"{n} = {values[n]}, expected 0"}
+              for n in a.zero if values[n] != 0]
+    errors += [{"metric": n, "message": f"{n} = {values[n]}, expected >= 0"}
+               for n in a.nonneg if values[n] < 0]
+    return write_report(a.out, stage, a.design, "fail" if errors else "pass", values, errors, a.metrics)
 
 
 STAGE_ORDER = ["netlist", "sim", "layout", "drc", "lvs", "pex"]
@@ -275,6 +332,28 @@ def build_parser():
     s.add_argument("--compare", help="schematic sim report to pair post-layout values with")
     s.add_argument("--out", required=True)
     s.set_defaults(func=cmd_sim)
+
+    s = sub.add_parser("dlint")
+    s.add_argument("--log", required=True)
+    s.add_argument("--design", required=True)
+    s.add_argument("--out", required=True)
+    s.set_defaults(func=cmd_dlint)
+
+    s = sub.add_parser("dsim")
+    s.add_argument("--results", required=True)
+    s.add_argument("--manifest", required=True)
+    s.add_argument("--design", required=True)
+    s.add_argument("--out", required=True)
+    s.set_defaults(func=cmd_dsim)
+
+    for name in ("dsynth", "dpnr"):
+        s = sub.add_parser(name)
+        s.add_argument("--metrics", required=True)
+        s.add_argument("--zero", action="append", default=[], help="metric that must be 0")
+        s.add_argument("--nonneg", action="append", default=[], help="metric that must be >= 0")
+        s.add_argument("--design", required=True)
+        s.add_argument("--out", required=True)
+        s.set_defaults(func=cmd_dmetrics)
 
     return p
 
