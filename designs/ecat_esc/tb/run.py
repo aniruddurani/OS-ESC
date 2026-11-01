@@ -21,6 +21,7 @@ TESTS = {
     "test_crc32": "crc32",
     "test_mii_rx": "mii_rx",
     "test_mii_loop": "mii_loop",
+    "test_cdc": "async_fifo",
 }
 
 
