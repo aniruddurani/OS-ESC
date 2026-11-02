@@ -67,7 +67,8 @@ async def test_station_address_writable(dut):
     await start(dut)
     await mem_write(dut, 0x0010, 0x34)
     await mem_write(dut, 0x0011, 0x12)
-    await RisingEdge(dut.clk)          # the write lands on the edge above; read one edge later
+    await RisingEdge(dut.clk)          # the write is registered, then lands: two edges after the request
+    await RisingEdge(dut.clk)
     assert int(dut.station_addr.value) == 0x1234
     assert await mem_read(dut, 0x0010) == 0x34
     assert await mem_read(dut, 0x0011) == 0x12

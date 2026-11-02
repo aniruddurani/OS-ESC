@@ -4,7 +4,9 @@
 // `cfg` is the regfile's FMMU configuration bus, 16 bytes per FMMU (see fmmu.v). The
 // datagram's address (`dg_addr`, held from the parser's dg_start on) and length (`dg_len`,
 // valid when `plan_len` pulses and held until the next datagram) and the direction flags
-// go in; the stages run free from the held inputs. Seven clocks after the `plan_len` edge
+// go in; the stages run free from the held inputs. `cfg` and `dg_addr` must be stable at least
+// four clocks before `plan_len` (the parser holds the address two header bytes ahead of the
+// length). Seven clocks after the `plan_len` edge
 // `plan_done` pulses and the segments below are loaded and held until the next plan:
 //   hr[i], hw[i]            FMMU i serves this datagram's reads / writes: it is active, has
 //                           a nonzero length, overlaps the datagram, allows the direction,
@@ -43,6 +45,16 @@ module fmmu_plan #(
         plan_done <= pd[5] && !rst;
     end
 
+    // Local copy of the datagram address (it also fans out to every FMMU) and the increment of its
+    // upper bits, ready before the length arrives: the datagram end is then a short add of the
+    // low 11 bits and a select, not a 32-bit carry chain.
+    reg [31:0] da0;
+    reg [21:0] dai;
+    always @(posedge clk) begin
+        da0 <= dg_addr;
+        dai <= {1'b0, da0[31:11]} + 22'd1;
+    end
+
     genvar g;
     generate
         for (g = 0; g < NF; g = g + 1) begin : g_f
@@ -61,15 +73,28 @@ module fmmu_plan #(
             reg        gt1, act1, rd1, wr1;
             reg [31:0] ds1, ws1;
             reg [15:0] ph1;
+            // Is the datagram end before the window end? de < we is dg_len < we - dg_addr. The
+            // difference needs only the window and the address, both known two header bytes
+            // before the length, so it is worked out ahead; stage 1 compares the length.
+            wire       [34:0] wd;                 // we - dg_addr, two clocks after the operands
+            reg               wd_neg, wd_big, lt1;
+            reg        [10:0] wd_lo;
+            // Physical start of the overlap: the window's plus (dg_addr - window start) when the
+            // datagram starts later; the sum is worked out ahead of the length.
+            wire       [15:0] dw;                 // dg_addr - window start
+            wire       [16:0] pp;                 // window physical start + dw
+            reg        [16:0] pp2, pp3;
             // stage 2: overlap start and end
             reg [32:0] lo2, hi2;
             reg [10:0] ds2;
-            reg [15:0] ws2, ph2;
+            reg [15:0] ph2;
+            reg        gt2;
             reg        act2, rd2, wr2;
             // stage 3: overlap test, chunk offsets
             reg        ovl3, rd3, wr3;
             reg [10:0] ss3, sl3;
-            reg [15:0] off3, ph3;
+            reg [15:0] ph3;
+            reg        gt3;
             // stage 4: chunk end offset, physical start
             reg        ovl4, rd4, wr4;
             reg [10:0] ss4, sl4, se4;
@@ -83,14 +108,23 @@ module fmmu_plan #(
             reg [10:0] ss6, se6;
             reg [15:0] bs5, bs6;
 
+            addsub_cs #(.W(35), .SUB(1)) u_wd (.clk(clk), .a({2'b00, we1}), .b({3'b000, da0}), .y(wd));
+            addsub_cs #(.W(16), .SUB(1)) u_dw (.clk(clk), .a(da0[15:0]), .b(f_start[15:0]), .y(dw));
+            addsub_cs #(.W(17), .SUB(0)) u_pp (.clk(clk), .a({1'b0, f_phys}), .b({1'b0, dw}), .y(pp));
+            wire [11:0] dsum = {1'b0, da0[10:0]} + {1'b0, dg_len};
+
             wire fits5 = (phi5 <= 17'h01000) ||
                          ((plo5 >= 17'h01000) && (phi5 >= 17'h01000) && ({15'd0, phi5} <= RAM_TOP));
 
             always @(posedge clk) begin
                 we1  <= {1'b0, f_start} + {17'd0, f_len};
-                de1  <= {1'b0, dg_addr} + {22'd0, dg_len};
-                gt1  <= (dg_addr > f_start);
-                ds1  <= dg_addr;
+                de1  <= {dsum[11] ? dai : {1'b0, da0[31:11]}, dsum[10:0]};
+                gt1  <= (da0 > f_start);
+                wd_neg <= wd[34];
+                wd_big <= !wd[34] && (|wd[33:11]);
+                wd_lo  <= wd[10:0];
+                lt1    <= !wd_neg && (wd_big || (dg_len < wd_lo));
+                ds1  <= da0;
                 ws1  <= f_start;
                 act1 <= f_act && (f_len != 16'd0);
                 rd1  <= f_rd && is_rd;
@@ -98,9 +132,10 @@ module fmmu_plan #(
                 ph1  <= f_phys;
 
                 lo2  <= gt1 ? {1'b0, ds1} : {1'b0, ws1};
-                hi2  <= (de1 < we1) ? de1 : we1;
+                hi2  <= lt1 ? de1 : we1;
                 ds2  <= ds1[10:0];
-                ws2  <= ws1[15:0];
+                pp2  <= pp;
+                gt2  <= gt1;
                 act2 <= act1;
                 rd2  <= rd1;
                 wr2  <= wr1;
@@ -109,7 +144,8 @@ module fmmu_plan #(
                 ovl3 <= act2 && (lo2 < hi2);
                 ss3  <= lo2[10:0] - ds2;
                 sl3  <= hi2[10:0] - lo2[10:0];
-                off3 <= lo2[15:0] - ws2;
+                pp3  <= pp2;
+                gt3  <= gt2;
                 rd3  <= rd2;
                 wr3  <= wr2;
                 ph3  <= ph2;
@@ -118,7 +154,7 @@ module fmmu_plan #(
                 se4  <= ss3 + sl3;
                 ss4  <= ss3;
                 sl4  <= sl3;
-                plo4 <= {1'b0, ph3} + {1'b0, off3};
+                plo4 <= gt3 ? pp3 : {1'b0, ph3};
                 rd4  <= rd3;
                 wr4  <= wr3;
 

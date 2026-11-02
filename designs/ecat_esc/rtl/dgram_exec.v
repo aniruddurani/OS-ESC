@@ -62,18 +62,26 @@ module dgram_exec #(
     localparam [1:0] K_HDR = 2'd1, K_DATA = 2'd2, K_WKC = 2'd3;
     localparam [31:0] RAM_LIM = RAM_BYTES;
 
-    // command decode (the parser holds dg_cmd steady for the whole datagram)
-    wire cmd_ap = (dg_cmd >= 8'd1) && (dg_cmd <= 8'd3);
-    wire cmd_fp = (dg_cmd >= 8'd4) && (dg_cmd <= 8'd6);
-    wire cmd_b  = (dg_cmd >= 8'd7) && (dg_cmd <= 8'd9);
-    wire cmd_l  = (dg_cmd >= 8'd10) && (dg_cmd <= 8'd12);
-    wire is_rd  = (dg_cmd == 8'd1) || (dg_cmd == 8'd3) || (dg_cmd == 8'd4) ||
-                  (dg_cmd == 8'd6) || (dg_cmd == 8'd7) || (dg_cmd == 8'd9) ||
-                  (dg_cmd == 8'd10) || (dg_cmd == 8'd12);
-    wire is_wr  = (dg_cmd == 8'd2) || (dg_cmd == 8'd3) || (dg_cmd == 8'd5) ||
-                  (dg_cmd == 8'd6) || (dg_cmd == 8'd8) || (dg_cmd == 8'd9) ||
-                  (dg_cmd == 8'd11) || (dg_cmd == 8'd12);
-    wire incr   = cmd_ap || cmd_b;
+    // command decode: the parser holds dg_cmd steady for the whole datagram, from header
+    // byte 0, many clocks before any of these is used, so the flags are registered
+    wire d_ap = (dg_cmd >= 8'd1) && (dg_cmd <= 8'd3);
+    wire d_fp = (dg_cmd >= 8'd4) && (dg_cmd <= 8'd6);
+    wire d_b  = (dg_cmd >= 8'd7) && (dg_cmd <= 8'd9);
+    wire d_l  = (dg_cmd >= 8'd10) && (dg_cmd <= 8'd12);
+    wire d_rd = (dg_cmd == 8'd1) || (dg_cmd == 8'd3) || (dg_cmd == 8'd4) ||
+                (dg_cmd == 8'd6) || (dg_cmd == 8'd7) || (dg_cmd == 8'd9) ||
+                (dg_cmd == 8'd10) || (dg_cmd == 8'd12);
+    wire d_wr = (dg_cmd == 8'd2) || (dg_cmd == 8'd3) || (dg_cmd == 8'd5) ||
+                (dg_cmd == 8'd6) || (dg_cmd == 8'd8) || (dg_cmd == 8'd9) ||
+                (dg_cmd == 8'd11) || (dg_cmd == 8'd12);
+    reg cmd_l, cmd_b, is_rd, is_wr, incr;
+    always @(posedge clk) begin
+        cmd_l <= d_l;
+        cmd_b <= d_b;
+        is_rd <= d_rd;
+        is_wr <= d_wr;
+        incr  <= d_ap || d_b;
+    end
 
     reg        addressed;
     reg        ok;              // addressed, and the whole access fits
@@ -181,8 +189,8 @@ module dgram_exec #(
                 rd_seen   <= 1'b0;
                 wr_seen   <= 1'b0;
                 ado       <= dg_addr[31:16];
-                addressed <= (cmd_ap && dg_addr[15:0] == 16'd0) ||
-                             (cmd_fp && dg_addr[15:0] == station_addr) || cmd_b;
+                addressed <= (d_ap && dg_addr[15:0] == 16'd0) ||
+                             (d_fp && dg_addr[15:0] == station_addr) || d_b;
             end
             if (len_d[2] && addressed && fits_r && is_rd && dg_len != 11'd0) begin
                 pf_go   <= 1'b1;                   // physical: start the first read early

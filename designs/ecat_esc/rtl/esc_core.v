@@ -26,6 +26,18 @@ module esc_core #(
     output       out_last,
     output       out_err
 );
+    // --- reset: one registered copy per block, so no reset net spans the whole core ---
+    // (the keep attribute stops synthesis from merging the copies back into one). A block
+    // leaves reset one clock after `rst` falls, all of them together.
+    reg rst_parse, rst_crc, rst_rf, rst_pd, rst_ex, rst_dg, rst_dl;
+    (* keep *) always @(posedge clk) rst_parse <= rst;
+    (* keep *) always @(posedge clk) rst_crc   <= rst;
+    (* keep *) always @(posedge clk) rst_rf    <= rst;
+    (* keep *) always @(posedge clk) rst_pd    <= rst;
+    (* keep *) always @(posedge clk) rst_ex    <= rst;
+    (* keep *) always @(posedge clk) rst_dg    <= rst;
+    (* keep *) always @(posedge clk) rst_dl    <= rst;
+
     // --- parser -----------------------------------------------------------
     wire        p_valid, p_first, p_last, p_err;
     wire  [7:0] p_data;
@@ -38,7 +50,7 @@ module esc_core #(
     wire        ev_end, ev_runt, ev_oversize, ev_non_ethercat, ev_malformed, ev_rx_err;
 
     frame_parse u_parse (
-        .clk(clk), .rst(rst),
+        .clk(clk), .rst(rst_parse),
         .valid(in_valid), .data(in_data), .first(in_first), .last(in_last), .err(in_err),
         .o_valid(p_valid), .o_data(p_data), .o_first(p_first), .o_last(p_last), .o_err(p_err),
         .o_kind(p_kind), .o_pos(p_pos),
@@ -53,7 +65,7 @@ module esc_core #(
     wire crc_residue, crc_residue_next;
     wire [31:0] crc_unused;
     crc32 u_crc (
-        .clk(clk), .rst(rst),
+        .clk(clk), .rst(rst_crc),
         .init(p_valid && p_last),            // ready for the next frame
         .valid(p_valid), .data(p_data),
         .crc(crc_unused), .residue_ok(crc_residue), .residue_next(crc_residue_next)
@@ -76,7 +88,7 @@ module esc_core #(
     wire [8*8*((N_SM == 0) ? 1 : N_SM)-1:0]      sm_cfg;
 
     regfile #(.N_FMMU(N_FMMU), .N_SM(N_SM), .RAM_BYTES(RAM_BYTES)) u_regfile (
-        .clk(clk), .rst(rst),
+        .clk(clk), .rst(rst_rf),
         .mem_req(mem_req && !hi && !diag_sel), .mem_we(mem_we), .mem_addr(mem_addr), .mem_wdata(mem_wdata),
         .mem_rdata(rf_rdata), .mem_rvalid(rf_rvalid),
         .dl_status(16'd0),
@@ -84,7 +96,7 @@ module esc_core #(
     );
 
     pdram #(.RAM_BYTES(RAM_BYTES)) u_pdram (
-        .clk(clk), .rst(rst),
+        .clk(clk), .rst(rst_pd),
         .mem_req(mem_req && hi), .mem_we(mem_we), .mem_addr(mem_addr), .mem_wdata(mem_wdata),
         .mem_rdata(pd_rdata), .mem_rvalid(pd_rvalid)
     );
@@ -102,7 +114,7 @@ module esc_core #(
     wire  [1:0] ev_wkc_inc;
 
     dgram_exec #(.N_FMMU(N_FMMU), .RAM_BYTES(RAM_BYTES)) u_exec (
-        .clk(clk), .rst(rst),
+        .clk(clk), .rst(rst_ex),
         .p_valid(p_valid), .p_data(p_data), .p_first(p_first), .p_last(p_last),
         .p_kind(p_kind), .p_pos(p_pos),
         .dg_start(dg_start), .dg_len_done(dg_len_done), .dg_hdr_done(dg_hdr_done),
@@ -119,7 +131,7 @@ module esc_core #(
     generate
         if (DIAG_EN != 0) begin : g_diag
             diag #(.TRACE_DEPTH(TRACE_DEPTH), .CNT_W(CNT_W)) u_diag (
-                .clk(clk), .rst(rst),
+                .clk(clk), .rst(rst_dg),
                 .in_first_seen(in_valid && in_first), .out_first_seen(out_valid && out_first),
                 .ev_end(ev_end), .ev_runt(ev_runt), .ev_oversize(ev_oversize),
                 .ev_non_ethercat(ev_non_ethercat), .ev_malformed(ev_malformed),
@@ -138,7 +150,7 @@ module esc_core #(
     // --- drop the received FCS (the transmitter writes a new one) ------------
     wire tag_unused;
     delay_line #(.DEPTH(4), .TW(1)) u_delay (
-        .clk(clk), .rst(rst),
+        .clk(clk), .rst(rst_dl),
         .valid(x_valid), .data(x_data), .first(x_first), .last(x_last), .err(x_err), .tag(1'b0),
         .o_valid(out_valid), .o_data(out_data), .o_first(out_first), .o_last(out_last),
         .o_err(out_err), .o_tag(tag_unused)
@@ -146,5 +158,5 @@ module esc_core #(
 
     wire _unused_ok = &{1'b0, p_err, dg_idx, dg_more, dg_circ, ev_end, crc_residue,
                         crc_unused, sm_cfg, ev_dg, ev_addressed, ev_wkc_inc,
-                        tag_unused};
+                        tag_unused, rst_dg};
 endmodule

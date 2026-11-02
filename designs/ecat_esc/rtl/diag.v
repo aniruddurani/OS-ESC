@@ -1,6 +1,6 @@
 // Diagnostics: counters and a datagram trace buffer. It only watches (it has no
 // connection to the datapath's data and never drives it) and is read through the
-// byte-wide memory port at 0x0E00..0x0EFF with the usual 2-clock read latency.
+// byte-wide memory port at 0x0E00..0x0EFF with the usual 3-clock read latency (MEM_LAT).
 // Writes are ignored. Layout (counters are 16-bit little-endian slots, the value
 // zero-extended from CNT_W bits, saturating):
 //   0x0E00 + 2*k   k = 0 frames, 1 rx_errors, 2 crc_failures, 3 runts, 4 oversize,
@@ -107,20 +107,21 @@ module diag #(
 
     // --- read side -------------------------------------------------------------
     reg [15:0] slot;
-    reg [7:0]  rd;
-    wire [3:0] entry_byte = mem_addr[3:0];
+    reg [7:0]  a1;                  // the request is registered first, then decoded
+    reg [7:0]  r_cnt, r_trace;
+    wire [3:0] entry_byte = a1[3:0];
     // entry index = (addr - 0x40) / 16, which for 0x40..0xBF is the top bit flipped
-    wire [2:0] entry_idx  = {~mem_addr[6], mem_addr[5:4]};
+    wire [2:0] entry_idx  = {~a1[6], a1[5:4]};
     generate
         if (TAW < 3) begin : g_idx_unused
             wire _unused_ok = &{1'b0, entry_idx[2:TAW]};
         end
     endgenerate
-    wire       in_trace   = (mem_addr >= 8'h40) && (mem_addr < 8'h40 + 8'd16 * TRACE_DEPTH);
+    wire       in_trace   = (a1 >= 8'h40) && (a1 < 8'h40 + 8'd16 * TRACE_DEPTH);
 
     always @* begin
         slot = 16'd0;
-        case (mem_addr[5:1])
+        case (a1[5:1])
             5'd0:  slot = {{(16 - CNT_W){1'b0}}, c_frames};
             5'd1:  slot = {{(16 - CNT_W){1'b0}}, c_rx_errors};
             5'd2:  slot = {{(16 - CNT_W){1'b0}}, c_crc_failures};
@@ -135,22 +136,18 @@ module diag #(
             5'd11: slot = trace_count;
             default: slot = 16'd0;
         endcase
-        if (in_trace)
-            rd = trace_mem[entry_idx[TAW-1:0]][8*entry_byte +: 8];
-        else if (mem_addr < 8'h40)
-            rd = mem_addr[0] ? slot[15:8] : slot[7:0];
-        else
-            rd = 8'h00;
     end
 
-    reg       rv1, rv2;
-    reg [7:0] rd1, rd2;
+    // clock 1: address register; clock 2: counter byte and trace byte (the two ranges do
+    // not overlap); clock 3: their OR
+    reg rv1, rv2;
     always @(posedge clk) begin
+        a1         <= mem_addr;
         rv1        <= rst ? 1'b0 : (mem_req && !mem_we);
-        rd1        <= rd;
+        r_cnt      <= (a1 < 8'h40) ? (a1[0] ? slot[15:8] : slot[7:0]) : 8'h00;
+        r_trace    <= in_trace ? trace_mem[entry_idx[TAW-1:0]][8*entry_byte +: 8] : 8'h00;
         rv2        <= rst ? 1'b0 : rv1;
-        rd2        <= rd1;
         mem_rvalid <= rst ? 1'b0 : rv2;
-        mem_rdata  <= rd2;
+        mem_rdata  <= r_cnt | r_trace;
     end
 endmodule

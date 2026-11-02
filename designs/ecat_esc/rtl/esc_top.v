@@ -57,6 +57,14 @@ module esc_top #(
 
     wire        rxf_full, rxf_empty;
     wire [10:0] rxf_rdata;
+    // The FIFO pops every entry as soon as it is not empty, so one register stage between its
+    // read mux and the core costs a clock of latency and takes the 16:1 select out of the core path.
+    reg         in_v;
+    reg  [10:0] in_d;
+    always @(posedge clk) begin
+        in_v <= !rxf_empty && !core_rst;
+        in_d <= rxf_rdata;
+    end
 
     async_fifo #(.W(11), .DEPTH(FIFO_DEPTH)) u_rxfifo (
         .wclk(rx_clk), .wrst(rx_rst), .we(r_valid),
@@ -75,8 +83,8 @@ module esc_top #(
     esc_core #(.N_FMMU(N_FMMU), .N_SM(N_SM), .RAM_BYTES(RAM_BYTES), .DIAG_EN(DIAG_EN),
                .TRACE_DEPTH(TRACE_DEPTH), .CNT_W(CNT_W)) u_core (
         .clk(clk), .rst(core_rst),
-        .in_valid(!rxf_empty), .in_data(rxf_rdata[7:0]), .in_first(rxf_rdata[8]),
-        .in_last(rxf_rdata[9]), .in_err(rxf_rdata[10]),
+        .in_valid(in_v), .in_data(in_d[7:0]), .in_first(in_d[8]),
+        .in_last(in_d[9]), .in_err(in_d[10]),
         .out_valid(c_valid), .out_data(c_data), .out_first(c_first), .out_last(c_last),
         .out_err(c_err)
     );

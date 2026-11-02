@@ -10,6 +10,7 @@ import fmmu_ref
 N_FMMU = 16                  # must equal the N_FMMU set for this module in run.py
 RAM = 256                    # ... and RAM_BYTES
 LATENCY = 7                  # plan_done is visible this many edges after the plan_len edge
+EARLY = 4                    # the window and address are held this many edges before plan_len
 
 
 async def start(dut):
@@ -36,9 +37,12 @@ async def run_plan(dut, fmmus, ds, dl, is_rd, is_wr):
     the FMMU outputs at that point."""
     dut.cfg.value = fmmu_ref.pack_cfg(fmmus)
     dut.dg_addr.value = ds
-    dut.dg_len.value = dl
+    dut.dg_len.value = 0                    # the length is not known yet
     dut.is_rd.value = int(is_rd)
     dut.is_wr.value = int(is_wr)
+    for _ in range(EARLY):                  # window and address are known before the length
+        await RisingEdge(dut.clk)
+    dut.dg_len.value = dl
     dut.plan_len.value = 1
     await RisingEdge(dut.clk)               # the edge that samples plan_len
     dut.plan_len.value = 0
