@@ -5,6 +5,7 @@ import zlib
 
 import cocotb
 from cocotb.clock import Clock
+from cocotb.triggers import RisingEdge
 
 import model_path  # noqa: F401
 from ecat import CMD, Datagram, SlaveModel, build_frame
@@ -22,6 +23,14 @@ def fcs_ok(frame):
     return zlib.crc32(frame[:-4]).to_bytes(4, "little") == frame[-4:]
 
 
+async def watch_late(dut):
+    """Fail the test the moment a logical data byte passes before its read data is held."""
+    late = dut.u_exec.u_acc.late
+    while True:
+        await RisingEdge(dut.clk)
+        assert int(late.value) == 0, "a byte passed before its read data was held"
+
+
 async def start(dut, seed, n_fmmu=3):
     cocotb.start_soon(Clock(dut.clk, 10, unit="ns").start())
     dut.rst.value = 1
@@ -31,6 +40,7 @@ async def start(dut, seed, n_fmmu=3):
     await drv.idle(5)
     dut.rst.value = 0
     await drv.idle(3)
+    cocotb.start_soon(watch_late(dut))      # every test fails if a byte passes before its read data
     # Reset does not clear the RAM (a real RAM would not either), and cocotb runs
     # every test in one simulation: zero it through the datapath, on both sides.
     model = SlaveModel(ram_bytes=RAM, n_fmmu=n_fmmu)

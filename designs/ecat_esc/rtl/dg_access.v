@@ -13,7 +13,8 @@
 //
 // Ordering: bytes are processed in order. A read of offset q whose address equals that of a
 // write by an older, not yet consumed offset waits until it is the head, so it sees that
-// write exactly as if the bytes were handled one by one, whatever the byte spacing.
+// write exactly as if the bytes were handled one by one, whatever the byte spacing. That read
+// has no spare clock at 6-clock spacing: issue plus memory latency must stay within 5 clocks.
 module dg_access #(
     parameter N_FMMU    = 3,        // 0..16
     parameter RAM_BYTES = 1024
@@ -178,8 +179,8 @@ module dg_access #(
     end
 
     // Sticky simulation check: a byte passed before its read data was held. The engine
-    // relies on the byte spacing (at least 6 clocks); the testbenches read this flag
-    // (u_exec.u_acc.late) after every run.
+    // relies on the byte spacing (at least 6 clocks); every esc_core testbench watches this flag
+    // (u_exec.u_acc.late, core_util.watch_late) on every clock.
     /* verilator lint_off UNUSEDSIGNAL */
     reg late;
     /* verilator lint_on UNUSEDSIGNAL */

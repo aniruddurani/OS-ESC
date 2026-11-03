@@ -7,8 +7,6 @@ import random
 
 import cocotb
 
-from cocotb.triggers import RisingEdge
-
 from core_util import adp_ado, cfg_fmmu, exchange, one, start
 
 BASE = 0x20000                # logical address used by the tests
@@ -16,16 +14,8 @@ RAMB = 0x1000                 # first RAM address
 N = 16
 
 
-async def watch_late(dut):
-    """Fail the test the moment a data byte passes before its read data is held."""
-    while True:
-        await RisingEdge(dut.clk)
-        assert int(dut.u_exec.u_acc.late.value) == 0, "a byte passed before its read data was held"
-
-
 async def setup_map(dut, seed, period):
     drv, mon, rng, model = await start(dut, seed, n_fmmu=N)
-    cocotb.start_soon(watch_late(dut))
     drv.gap = (period, period)
     await exchange(drv, mon, model, one("APWR", adp_ado(0, RAMB), bytes(range(0x30, 0x70))))
     return drv, mon, rng, model
