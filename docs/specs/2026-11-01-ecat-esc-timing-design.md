@@ -1,6 +1,6 @@
 # ESC datapath timing restructure
 
-Status: draft for review. Branch `feat/ecat-spec`. Builds on
+Status: implemented (default and min pass all nine corners at 10 ns, 2026-11-03). Branch `feat/ecat-spec`. Builds on
 `2026-10-31-ecat-esc-frame-core-design.md` and `2026-11-01-ecat-esc-memory-design.md`.
 
 ## 1. Why
