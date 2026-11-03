@@ -2,7 +2,8 @@
 # Fast timing loop for the digital flow (run inside the container, from the repo root):
 #   scripts/fast_timing.sh <run tag> [corner] [last step]
 # Synthesis, placement, clock tree and the post-CTS timing repair, with the placement and
-# timing steps working at `corner` (default nom_ss_100C_1v60, the slowest of the nine), then
+# timing steps working at `corner` (default nom_ss_100C_1v60, the slowest of the nine; a
+# comma-separated list works on several corners at once), then
 # the report of that corner, so the setup problems of the slow corner show in about five
 # minutes instead of the hour a routed run takes. It does not replace `make dpnr`, which
 # gates all nine corners after routing. Rank the result with
@@ -20,8 +21,13 @@ cfg=${LLCFG:-default}
 dir=designs/ecat_esc/librelane
 tmp=$dir/_fast_$tag.yaml
 trap 'rm -f "$tmp"' EXIT
-cp "$dir/$cfg.yaml" "$tmp"
-printf '\nPNR_CORNERS:\n  - %s\n' "$corner" >> "$tmp"
+awk '/^PNR_CORNERS:/{skip=1; next} skip && /^[ -]/{next} {skip=0; print}' "$dir/$cfg.yaml" > "$tmp"
+{
+    echo
+    echo "PNR_CORNERS:"
+    for c in ${corner//,/ }; do echo "  - $c"; done
+} >> "$tmp"
+[ -n "${FAST_EXTRA:-}" ] && echo "$FAST_EXTRA" >> "$tmp"
 librelane "$tmp" --pdk $PDK --pdk-root $PDK_ROOT \
     --scl $STD_CELL_LIBRARY --overwrite --run-tag "$tag" --to "$last" \
     > "build/ecat_esc/logs/fast_$tag.log" 2>&1

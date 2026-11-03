@@ -5,7 +5,7 @@
 // datagram's address (`dg_addr`, held from the parser's dg_start on) and length (`dg_len`,
 // valid when `plan_len` pulses and held until the next datagram) and the direction flags
 // go in; the stages run free from the held inputs. `cfg` and `dg_addr` must be stable at least
-// four clocks before `plan_len` (the parser holds the address two header bytes ahead of the
+// six clocks before `plan_len` (the parser holds the address two header bytes ahead of the
 // length). Seven clocks after the `plan_len` edge
 // `plan_done` pulses and the segments below are loaded and held until the next plan:
 //   hr[i], hw[i]            FMMU i serves this datagram's reads / writes: it is active, has
@@ -69,7 +69,8 @@ module fmmu_plan #(
                                 cfg[128*g + 90 +: 6], cfg[128*g + 97 +: 31]};
 
             // stage 1: window end, datagram end, which start is later
-            reg [32:0] we1, de1;
+            wire [32:0] we1;            // window end, two clocks after cfg
+            reg  [32:0] de1;
             reg        gt1, act1, rd1, wr1;
             reg [31:0] ds1, ws1;
             reg [15:0] ph1;
@@ -108,6 +109,7 @@ module fmmu_plan #(
             reg [10:0] ss6, se6;
             reg [15:0] bs5, bs6;
 
+            addsub_cs #(.W(33), .SUB(0)) u_we (.clk(clk), .a({1'b0, f_start}), .b({17'd0, f_len}), .y(we1));
             addsub_cs #(.W(35), .SUB(1)) u_wd (.clk(clk), .a({2'b00, we1}), .b({3'b000, da0}), .y(wd));
             addsub_cs #(.W(16), .SUB(1)) u_dw (.clk(clk), .a(da0[15:0]), .b(f_start[15:0]), .y(dw));
             addsub_cs #(.W(17), .SUB(0)) u_pp (.clk(clk), .a({1'b0, f_phys}), .b({1'b0, dw}), .y(pp));
@@ -117,7 +119,6 @@ module fmmu_plan #(
                          ((plo5 >= 17'h01000) && (phi5 >= 17'h01000) && ({15'd0, phi5} <= RAM_TOP));
 
             always @(posedge clk) begin
-                we1  <= {1'b0, f_start} + {17'd0, f_len};
                 de1  <= {dsum[11] ? dai : {1'b0, da0[31:11]}, dsum[10:0]};
                 gt1  <= (da0 > f_start);
                 wd_neg <= wd[34];

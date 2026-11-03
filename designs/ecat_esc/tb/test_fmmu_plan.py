@@ -10,7 +10,7 @@ import fmmu_ref
 N_FMMU = 16                  # must equal the N_FMMU set for this module in run.py
 RAM = 256                    # ... and RAM_BYTES
 LATENCY = 7                  # plan_done is visible this many edges after the plan_len edge
-EARLY = 4                    # the window and address are held this many edges before plan_len
+EARLY = 6                    # the window and address are held this many edges before plan_len
 
 
 async def start(dut):

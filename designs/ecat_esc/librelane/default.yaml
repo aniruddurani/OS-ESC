@@ -21,3 +21,15 @@ FP_CORE_UTIL: 35
 # pdram_macro.v (unused in this configuration).
 EXTRA_VERILOG_MODELS:
   - dir::../tb/lint/sky130_sram_1kbyte_1rw1r_8x1024_8.v
+
+# The timing repair steps work on this one corner (the slowest of the nine); by default they
+# see only nom_tt, and the slow corner then fails by several ns after routing. The signoff
+# gate still reads all nine corners. Several corners at once made the repair give up.
+PNR_CORNERS:
+  - nom_ss_100C_1v60
+
+# Routing roughly doubles the net capacitance the placement estimate sees (about 4 ns at the
+# slow corner), so the repair steps work to a margin and run again after global routing.
+PL_RESIZER_SETUP_SLACK_MARGIN: 4.0
+RUN_POST_GRT_RESIZER_TIMING: true
+GRT_RESIZER_SETUP_SLACK_MARGIN: 3.0

@@ -107,7 +107,8 @@ module diag #(
 
     // --- read side -------------------------------------------------------------
     reg [15:0] slot;
-    reg [7:0]  a1;                  // the request is registered first, then decoded
+    reg [6:0]  a1;                  // the request is registered first, then decoded
+    reg        lo1, tr1;            // ... with the range tests, which use the address as it comes in
     reg [7:0]  r_cnt, r_trace;
     wire [3:0] entry_byte = a1[3:0];
     // entry index = (addr - 0x40) / 16, which for 0x40..0xBF is the top bit flipped
@@ -117,7 +118,6 @@ module diag #(
             wire _unused_ok = &{1'b0, entry_idx[2:TAW]};
         end
     endgenerate
-    wire       in_trace   = (a1 >= 8'h40) && (a1 < 8'h40 + 8'd16 * TRACE_DEPTH);
 
     always @* begin
         slot = 16'd0;
@@ -142,10 +142,12 @@ module diag #(
     // not overlap); clock 3: their OR
     reg rv1, rv2;
     always @(posedge clk) begin
-        a1         <= mem_addr;
+        a1         <= mem_addr[6:0];
+        lo1        <= (mem_addr < 8'h40);
+        tr1        <= (mem_addr >= 8'h40) && (mem_addr < 8'h40 + 8'd16 * TRACE_DEPTH);
         rv1        <= rst ? 1'b0 : (mem_req && !mem_we);
-        r_cnt      <= (a1 < 8'h40) ? (a1[0] ? slot[15:8] : slot[7:0]) : 8'h00;
-        r_trace    <= in_trace ? trace_mem[entry_idx[TAW-1:0]][8*entry_byte +: 8] : 8'h00;
+        r_cnt      <= lo1 ? (a1[0] ? slot[15:8] : slot[7:0]) : 8'h00;
+        r_trace    <= tr1 ? trace_mem[entry_idx[TAW-1:0]][8*entry_byte +: 8] : 8'h00;
         rv2        <= rst ? 1'b0 : rv1;
         mem_rvalid <= rst ? 1'b0 : rv2;
         mem_rdata  <= r_cnt | r_trace;
