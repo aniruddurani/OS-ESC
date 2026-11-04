@@ -111,6 +111,27 @@ class BenchTest(unittest.TestCase):
         for b, o, name in zip(base, off, ("rx", "tx")):
             self.assertAlmostEqual(o - b, want, delta=want * 0.1, msg=name)
 
+    def test_core_clock_frequency_is_configurable(self):
+        # 75 MHz is the board's floor: 6 core clocks per 80 ns byte.
+        def cycles(mhz):
+            link = Link(BIN, dict(DEFAULT_CONFIG, core_mhz=mhz))
+            try:
+                c0 = link.run(0, 1)[3]["core_cycles"]
+                return link.run(0, 10**8)[3]["core_cycles"] - c0       # 100 us
+            finally:
+                link.close()
+
+        self.assertAlmostEqual(cycles(100.0), 10_000, delta=2)
+        self.assertAlmostEqual(cycles(75.0), 7_500, delta=2)
+        link = Link(BIN, dict(DEFAULT_CONFIG, core_mhz=75.0))
+        try:
+            frame = aprd_frame()
+            link.send(frame)
+            _, replies, _, _ = link.run(1, 10**9)
+            self.assertEqual(replies[0]["data"], SlaveModel(ram_bytes=RAM).process(frame))
+        finally:
+            link.close()
+
     def test_run_ends_with_one_status(self):
         sent, replies, events, status = self.link.run(0, 1_000_000)
         self.assertEqual((sent, replies, events), ([], [], []))

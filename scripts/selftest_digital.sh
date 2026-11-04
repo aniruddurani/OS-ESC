@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Prove the digital gates catch real faults: each known-bad input must fail the gate
-# built for them (dlint, dsim, dpnr, and six for dnet), and a failure must stop the
+# built for them (dlint, dsim, dpnr, and seven for dnet), and a failure must stop the
 # stages after it.
 # Run inside the container via `make dselftest`. Prints DSELFTEST PASS or exits 1.
 set -u
@@ -61,8 +61,8 @@ metric_of() {  # metric_of <report.json> <key> -> the metric's value, or "none"
   python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['metrics'][sys.argv[2]])" "$1" "$2" 2>/dev/null || echo none
 }
 
-net_mutant() {  # net_mutant <name> <file> <present-pattern> <sed expression>
-  local name=$1 file=$2 pat=$3 expr=$4
+net_mutant() {  # net_mutant <name> <file> <present-pattern> <sed expression> [netsim args]
+  local name=$1 file=$2 pat=$3 expr=$4 args=${5:-}
   mkdir -p $ROOT/rtl_$name
   cp designs/ecat_esc/rtl/*.v $ROOT/rtl_$name/
   expect "mutation present before" "$(grep -c -- "$pat" $ROOT/rtl_$name/$file)" 1
@@ -71,7 +71,7 @@ net_mutant() {  # net_mutant <name> <file> <present-pattern> <sed expression>
   make dlint DRTL_DIR=$ROOT/rtl_$name DBUILD=$ROOT/$name >/dev/null 2>&1
   expect "dlint status (the mutant is lint-clean)" "$(status_of $ROOT/$name/reports/dlint.json)" pass
   touch $ROOT/$name/stamps/dsim.pass
-  make dnet DRTL_DIR=$ROOT/rtl_$name DBUILD=$ROOT/$name >/dev/null 2>&1
+  make dnet DRTL_DIR=$ROOT/rtl_$name DBUILD=$ROOT/$name NETSIM_ARGS="$args" >/dev/null 2>&1
   expect "make exit code is non-zero" "$(nonzero $?)" yes
   expect "dnet status" "$(status_of $ROOT/$name/reports/dnet.json)" fail
   expect "no dnet pass stamp" "$([ ! -e $ROOT/$name/stamps/dnet.pass ] && echo yes || echo no)" yes
@@ -89,6 +89,14 @@ expect "flags_seen has overflow or underrun" "$(metric_of $ROOT/net_gap/reports/
 echo "net_txfifo: four-entry FIFOs must fail dnet with an overflow or underrun flag"
 net_mutant net_txfifo esc_top.v "parameter FIFO_DEPTH  = 16" "s/parameter FIFO_DEPTH  = 16/parameter FIFO_DEPTH  = 4/"
 expect "flags_seen has overflow or underrun" "$(metric_of $ROOT/net_txfifo/reports/dnet.json flags_seen | python3 -c "import sys; v=sys.stdin.read().strip(); print('yes' if v.isdigit() and int(v) & 7 else 'no')")" yes
+
+echo "net_ramlat: process RAM one clock slower must fail dnet with a 76 MHz core (6 clocks per byte)"
+# At 100 MHz a byte is 8 core clocks and the extra clock is harmless; 76 MHz is the lowest
+# clean core clock measured (at exactly 75 MHz an RX clock faster than nominal leaves 5).
+net_mutant net_ramlat pdram_flop.v "mem_rvalid <= !rst && rv2;" \
+  "s/^    reg           rv1;/    reg           rv1; reg rv3; reg [7:0] rd3;/;s/        mem_rdata  <= pick2\[8\*grp2 +: 8\];/        rd3 <= pick2[8*grp2 +: 8]; mem_rdata <= rd3;/;s/        mem_rvalid <= !rst \&\& rv2;/        rv3 <= !rst \&\& rv2; mem_rvalid <= !rst \&\& rv3;/" \
+  "--core-mhz 76"
+expect "mismatches or late" "$(python3 -c "import json,sys; m=json.load(open(sys.argv[1]))['metrics']; print('yes' if m['mismatches'] > 0 or m['late'] > 0 else 'no')" $ROOT/net_ramlat/reports/dnet.json 2>/dev/null || echo no)" yes
 
 echo "net_diagfcs: a CRC-failure counter that never counts must fail dnet's fault evidence"
 net_mutant net_diagfcs diag.v "c_crc_failures <= sat_add(c_crc_failures, 2'd1)" \

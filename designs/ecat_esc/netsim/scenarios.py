@@ -34,10 +34,11 @@ class Tx:
     fault: str = None               # one of FAULTS, or None for a good frame
 
 
-def clock_config(scenario, seed):
+def clock_config(scenario, seed, core_mhz=100.0):
     """CONFIG fields for one run. `clocks` covers the Ethernet limit of +-100 ppm, with the
     worst cases fixed on seeds 0 and 1 (RX fast and TX slow, then the reverse) and slow
-    drift on the others; every other scenario gets static offsets within +-50 ppm."""
+    drift on the others; every other scenario gets static offsets within +-50 ppm. The core
+    clock is `core_mhz` (75 MHz, 6 clocks per byte, is the board's floor)."""
     import random
     rng = random.Random(f"clock:{scenario}:{seed}")
     phases = dict(rx_phase_ns=rng.uniform(0, 40), tx_phase_ns=rng.uniform(0, 40),
@@ -51,7 +52,8 @@ def clock_config(scenario, seed):
             rx, tx, drift = rng.uniform(-100, 100), rng.uniform(-100, 100), rng.uniform(0, 20)
     else:
         rx, tx, drift = rng.uniform(-50, 50), rng.uniform(-50, 50), 0.0
-    return dict(seed=seed, rx_ppm=rx, tx_ppm=tx, drift_ppm_per_s=drift, event_level=0, **phases)
+    return dict(seed=seed, rx_ppm=rx, tx_ppm=tx, drift_ppm_per_s=drift, core_mhz=float(core_mhz),
+                event_level=0, **phases)
 
 
 class Net:

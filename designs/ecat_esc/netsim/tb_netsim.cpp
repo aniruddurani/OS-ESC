@@ -59,7 +59,6 @@ bool read_msg(uint8_t& type, std::vector<uint8_t>& body) {
 }
 
 constexpr double MII_PERIOD_PS = 40000.0;   // 25 MHz
-constexpr uint64_t CORE_HALF_PS = 5000;     // 100 MHz
 
 // A PHY clock: nominal 25 MHz off by `ppm`, which walks by `drift` ppm per simulated second
 // and reflects at +-bound (the configured offset's size). Edges are kept at their ideal time
@@ -109,7 +108,9 @@ public:
         tx_.ppm = c.tx_ppm; tx_.bound = std::fabs(c.tx_ppm); tx_.drift = c.drift_ppm_per_s;
         rx_.start(c.rx_phase_ns * 1000);
         tx_.start(c.tx_phase_ns * 1000);
-        core_next_ = static_cast<uint64_t>(std::llround(c.core_phase_ns * 1000));
+        core_half_ = 1e6 / c.core_mhz / 2;       // ps; edges kept at their ideal time, as PhyClock
+        core_edge_ = c.core_phase_ns * 1000;
+        core_next_ = static_cast<uint64_t>(std::llround(core_edge_));
         rx_.set_period();
         tx_.set_period();
         level_ = c.event_level;
@@ -221,7 +222,11 @@ private:
         bool tx_rise = tx_e && !tx_.level;
         if (tx_rise) monitor();              // the transmit pins as they were before this edge
         if (rx_fall) drive(t);               // new receive nibble, sampled at the next rising edge
-        if (core_e) { top_->clk = !top_->clk; core_next_ = t + CORE_HALF_PS; }
+        if (core_e) {
+            top_->clk = !top_->clk;
+            core_edge_ += core_half_;
+            core_next_ = static_cast<uint64_t>(std::llround(core_edge_));
+        }
         if (rx_e) {
             rx_.level = !rx_.level; top_->rx_clk = rx_.level;
             if (rx_.level) rx_.set_period();
@@ -308,6 +313,7 @@ private:
     std::unique_ptr<Vesc_top> top_;
     PhyClock rx_, tx_;
     uint64_t core_next_ = 0, now_ = 0, cycles_ = 0;
+    double core_edge_ = 0, core_half_ = 5000;
     bool configured_ = false;
     std::deque<RxFrame> rxq_;
     RxFrame cur_;
@@ -366,8 +372,11 @@ int main(int argc, char** argv) {
                 c.seed = in.get<uint64_t>();
                 c.rx_ppm = in.get<double>(); c.tx_ppm = in.get<double>(); c.drift_ppm_per_s = in.get<double>();
                 c.rx_phase_ns = in.get<double>(); c.tx_phase_ns = in.get<double>(); c.core_phase_ns = in.get<double>();
+                c.core_mhz = in.get<double>();
                 c.event_level = in.get<uint8_t>();
                 in.done();
+                if (!(c.core_mhz >= 1 && c.core_mhz <= 1000))
+                    throw std::runtime_error("core_mhz out of range (1 to 1000)");
                 bench.configure(c);
                 break;
             }
