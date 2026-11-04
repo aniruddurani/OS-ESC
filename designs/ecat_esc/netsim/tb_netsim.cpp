@@ -13,8 +13,15 @@
 #include <vector>
 
 #include "Vesc_top.h"
+#include "Vesc_top___024root.h"
 #include "proto.h"
 #include "verilated.h"
+
+// Probed internal signals (probes.vlt); a renamed RTL signal fails the build here.
+#define TOP(n) (top_->rootp->esc_top__DOT__##n)
+#define CORE(n) (top_->rootp->esc_top__DOT__u_core__DOT__##n)
+#define PARSE(n) (top_->rootp->esc_top__DOT__u_core__DOT__u_parse__DOT__##n)
+#define ACC(n) (top_->rootp->esc_top__DOT__u_core__DOT__u_exec__DOT__u_acc__DOT__##n)
 
 namespace {
 
@@ -76,7 +83,17 @@ struct RxFrame {
     std::vector<uint8_t> nibs;   // preamble, SFD, data low nibble first
     int er = -1;                 // nibble index (into nibs) that raises rx_er
     unsigned ifg = 24;
+    bool record = false;         // emit this frame's events at event level 1
 };
+
+struct Ev {
+    uint64_t t;
+    uint8_t block, kind;
+    uint32_t a, b;
+    uint64_t seq;                // receive frame count when the event happened
+};
+
+constexpr uint64_t RING_FRAMES = 64;
 
 class Bench {
 public:
@@ -90,6 +107,7 @@ public:
         core_next_ = static_cast<uint64_t>(std::llround(c.core_phase_ns * 1000));
         rx_.set_period();
         tx_.set_period();
+        level_ = c.event_level;
         top_->rst = 1;
         top_->rx_dv = 0; top_->rx_er = 0; top_->rxd = 0;
         top_->clk = 0; top_->rx_clk = 0; top_->tx_clk = 0;
@@ -109,10 +127,22 @@ public:
         uint64_t t0 = now_;
         replies_ = 0;
         seen_ = 0;
+        emitting_ = true;
         while (now_ - t0 < timeout) {
             if (want && replies_ >= want && rx_idle()) break;
             step();
         }
+        emitting_ = false;
+        if (rx_idle() && !tx_active_) {          // a frame the RTL dropped must not keep recording on
+            inflight_.clear();
+            recording_ = 0;
+        }
+        status();
+    }
+
+    // The ring buffer of the last RING_FRAMES frames' events (event level 1), then STATUS.
+    void dump() {
+        for (const Ev& e : ring_) write_event(e);
         status();
     }
 
@@ -128,6 +158,53 @@ public:
 private:
     bool rx_idle() const { return !in_frame_ && gap_ == 0 && rxq_.empty(); }
 
+    static void write_event(const Ev& e) {
+        proto::Out o;
+        o.put<uint64_t>(e.t); o.put<uint8_t>(e.block); o.put<uint8_t>(e.kind);
+        o.put<uint32_t>(e.a); o.put<uint32_t>(e.b);
+        write_msg(proto::EVENT, o);
+    }
+
+    void emit(uint8_t block, uint8_t kind, uint32_t a = 0, uint32_t b = 0) {
+        if (!level_ || !emitting_) return;
+        Ev e{now_, block, kind, a, b, rx_seq_};
+        if (level_ == 2 || recording_ > 0) write_event(e);
+        if (level_ == 1) {
+            ring_.push_back(e);
+            while (!ring_.empty() && ring_.front().seq + RING_FRAMES <= rx_seq_) ring_.pop_front();
+        }
+    }
+
+    // core-domain probes, after a rising edge of clk
+    void probe_core() {
+        if (TOP(in_v)) {
+            if (TOP(in_d) & 0x100) emit(proto::RX_FIFO, proto::FRAME_START);
+            if (TOP(in_d) & 0x200) emit(proto::RX_FIFO, proto::FRAME_END);
+        }
+        if (PARSE(dg_hdr_done))
+            emit(proto::PARSER, proto::DG_HDR, PARSE(dg_cmd) | (uint32_t(PARSE(dg_len)) << 8), PARSE(dg_addr));
+        if (PARSE(ev_end)) {
+            emit(proto::PARSER, proto::FRAME_END);
+            uint32_t f = (PARSE(ev_runt) ? proto::F_RUNT : 0) | (PARSE(ev_oversize) ? proto::F_OVERSIZE : 0) |
+                         (PARSE(ev_non_ethercat) ? proto::F_NON_ETHERCAT : 0) |
+                         (PARSE(ev_malformed) ? proto::F_MALFORMED : 0) | (PARSE(ev_rx_err) ? proto::F_RX_ERR : 0);
+            if (f) emit(proto::PARSER, proto::FAULT, f);
+        }
+        if (ACC(plan_done) && (ACC(hr) | ACC(hw))) emit(proto::FMMU, proto::FMMU_HIT, ACC(hr), ACC(hw));
+        if (CORE(mem_req)) emit(proto::MEM, CORE(mem_we) ? proto::MEM_WR : proto::MEM_RD, CORE(mem_addr));
+        if (CORE(ev_dg)) emit(proto::EXEC, proto::WKC, CORE(ev_wkc_inc));
+        if (TOP(c_valid)) {
+            if (TOP(c_first)) emit(proto::TX_FIFO, proto::FRAME_START);
+            if (TOP(c_last)) emit(proto::TX_FIFO, proto::FRAME_END);
+        }
+    }
+
+    // receive-domain probes, after a rising edge of rx_clk
+    void probe_rx() {
+        if (TOP(r_valid) && TOP(r_first)) emit(proto::MII_RX, proto::FRAME_START);
+        if (TOP(r_valid) && TOP(r_last)) emit(proto::MII_RX, proto::FRAME_END);
+    }
+
     void step() {
         uint64_t t = std::min(core_next_, std::min(rx_.next, tx_.next));
         bool core_e = core_next_ == t, rx_e = rx_.next == t, tx_e = tx_.next == t;
@@ -135,6 +212,7 @@ private:
         ctx_->time(t);
         bool core_rise = core_e && !top_->clk;
         bool rx_fall = rx_e && rx_.level;
+        bool rx_rise = rx_e && !rx_.level;
         bool tx_rise = tx_e && !tx_.level;
         if (tx_rise) monitor();              // the transmit pins as they were before this edge
         if (rx_fall) drive(t);               // new receive nibble, sampled at the next rising edge
@@ -150,9 +228,13 @@ private:
             tx_.next = t + tx_.half;
         }
         top_->eval();
-        if (core_rise) cycles_++;
+        if (core_rise) {
+            cycles_++;
+            if (level_) probe_core();
+        }
+        if (rx_rise && level_) probe_rx();
         uint8_t f = (top_->rx_overflow ? proto::RX_OVERFLOW : 0) | (top_->tx_overflow ? proto::TX_OVERFLOW : 0) |
-                    (top_->tx_underrun ? proto::TX_UNDERRUN : 0);
+                    (top_->tx_underrun ? proto::TX_UNDERRUN : 0) | (ACC(late) ? proto::LATE : 0);
         seen_ |= f;
         sticky_ |= f;
     }
@@ -166,6 +248,9 @@ private:
             in_frame_ = true;
             pos_ = 0;
             sent_start_ = t;
+            rx_seq_++;
+            inflight_.push_back(cur_.record);
+            if (cur_.record) recording_++;
         }
         if (in_frame_ && pos_ < cur_.nibs.size()) {
             top_->rx_dv = 1;
@@ -186,12 +271,20 @@ private:
 
     void monitor() {
         if (top_->tx_en) {
-            if (!tx_active_) { tx_active_ = true; tx_start_ = now_; tx_nibs_.clear(); }
+            if (!tx_active_) {
+                tx_active_ = true; tx_start_ = now_; tx_nibs_.clear();
+                emit(proto::MII_TX, proto::FRAME_START);
+            }
             tx_nibs_.push_back(top_->txd & 0xF);
             return;
         }
         if (!tx_active_) return;
         tx_active_ = false;
+        emit(proto::MII_TX, proto::FRAME_END);
+        if (!inflight_.empty()) {
+            if (inflight_.front() && recording_ > 0) recording_--;
+            inflight_.pop_front();
+        }
         // preamble nibbles 0x5 (at least two) then the SFD nibble 0xD, then data low nibble first
         std::vector<uint8_t> data;
         size_t sfd = 0;
@@ -223,13 +316,19 @@ private:
     std::vector<uint8_t> tx_nibs_;
     uint32_t replies_ = 0;
     uint8_t seen_ = 0, sticky_ = 0;
+    uint8_t level_ = 0;          // 0 none, 1 recorded frames plus the ring, 2 all
+    bool emitting_ = false;      // only while handling RUN
+    uint64_t rx_seq_ = 0;
+    int recording_ = 0;
+    std::deque<bool> inflight_;  // per frame between receive start and transmit end: recorded?
+    std::deque<Ev> ring_;
 };
 
 RxFrame make_frame(proto::In& in) {
     RxFrame f;
     f.ifg = in.get<uint16_t>();
     int32_t er = in.get<int32_t>();
-    in.get<uint8_t>();                                   // flags: event recording (probes task)
+    f.record = in.get<uint8_t>() & 1;
     std::vector<uint8_t> data = in.rest();
     for (int i = 0; i < 15; i++) f.nibs.push_back(0x5);
     f.nibs.push_back(0xD);
@@ -275,7 +374,7 @@ int main(int argc, char** argv) {
                 bench.run(want, timeout);
                 break;
             }
-            case proto::DUMP: in.done(); bench.status(); break;
+            case proto::DUMP: in.done(); bench.dump(); break;
             case proto::QUIT: return 0;
             default: throw std::runtime_error("unexpected message type " + std::to_string(type));
             }

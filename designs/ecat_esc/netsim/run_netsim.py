@@ -86,9 +86,15 @@ def parse_diag(reply):
     return dict(zip(DIAG_NAMES, struct.unpack_from("<12H", d.data)))
 
 
-def run_one(spec, binary, out_dir, write_pcaps):
+def write_events(path, events):
+    with open(path, "a") as f:
+        for e in events:
+            f.write(json.dumps(dict(t=e["t_ps"], block=e["block"], kind=e["kind"], a=e["a"], b=e["b"])) + "\n")
+
+
+def run_one(spec, binary, out_dir, write_pcaps, event_level=0):
     start = time.time()
-    config = clock_config(spec["scenario"], spec["seed"])
+    config = dict(clock_config(spec["scenario"], spec["seed"]), event_level=event_level)
     res = dict(spec, config=config, metrics={}, injected={}, diag={}, failures=[], sim_ps=0,
                wall_s=0.0, cycles=0, error="")
     link = None
@@ -147,6 +153,9 @@ def run_one(spec, binary, out_dir, write_pcaps):
             if checker.failures and not res["failures"]:
                 res["failures"] = list(checker.failures)        # first failure: keep the frames before it
                 res["ring"] = list(ring)
+                if event_level:                                 # and the RTL's events around it
+                    events, _ = link.dump()
+                    write_events(os.path.join(out_dir, f"fail_{run_name(spec)}.events.jsonl"), events)
         s, r, _, status = link.run(0, ALLOWANCE_PS)           # let the last replies come back
         absorb(s, r, status)
         checker.close(status["t_ps"])
@@ -191,13 +200,16 @@ def main(argv=None):
     p.add_argument("--jobs", type=int, default=max(1, (os.cpu_count() or 2) - 2))
     p.add_argument("--seed", type=int, default=1)
     p.add_argument("--only", help="run only the named run (scenario_kK_sSEED)")
+    p.add_argument("--event-level", type=int, choices=[0, 1], default=0,
+                   help="1: keep the RTL's events of the last 64 frames and write them out at the "
+                        "first mismatch (slower)")
     a = p.parse_args(argv)
     os.makedirs(a.out, exist_ok=True)
     runs = plan_runs(read_manifest(a.manifest), a.size, a.seed)
     if a.only:
         runs = [r for r in runs if run_name(r) == a.only]
     start = time.time()
-    jobs = [(r, a.binary, a.out, a.size == "quick") for r in runs]
+    jobs = [(r, a.binary, a.out, a.size == "quick", a.event_level) for r in runs]
     with multiprocessing.Pool(min(a.jobs, len(jobs) or 1)) as pool:
         results = pool.map(_worker, jobs, chunksize=1)
     with open(os.path.join(a.out, "results.json"), "w") as f:
