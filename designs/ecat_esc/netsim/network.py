@@ -15,11 +15,14 @@ class Chain:
         self.slaves = [SlaveModel(n_fmmu=n_fmmu, ram_bytes=ram_bytes, n_sm=n_sm) for _ in range(k)]
         self.dut = SlaveModel(n_fmmu=n_fmmu, ram_bytes=ram_bytes, n_sm=n_sm)
 
-    def forward(self, frame, rx_err=False):
+    def forward(self, frame, rx_err=False, hops=None):
         """(what the RTL receives, what it must send back); (None, None) if a model slave
-        drops the frame. `rx_err` is a fault on the RTL's own receive pins."""
+        drops the frame. `rx_err` is a fault on the RTL's own receive pins. If `hops` is a
+        list, the frame as each model slave sends it on is appended to it."""
         for s in self.slaves:
             frame = s.process(frame)
             if frame is None:
                 return None, None
+            if hops is not None:
+                hops.append(frame)
         return frame, self.dut.process(frame, rx_err=rx_err)

@@ -107,8 +107,19 @@ DNET_TAG    := $(if $(filter soak,$(NETSIM)),dnet_soak,dnet)
 DNET_OUT    := $(DBUILD)/netsim/$(NETSIM)
 DNET_SRC    := $(wildcard $(DNET)/*.py) $(DNET)/manifest.txt $(wildcard designs/$(DDESIGN)/model/*.py)
 
-.PHONY: dnet
-dnet: $(DSTAMPS)/$(DNET_TAG).pass
+.PHONY: dnet dnet-gui dnet-view
+# GUI=1: watch mode with the live view on http://127.0.0.1:$(GUI_PORT) (not a gate).
+GUI      ?=
+SCENARIO ?= cyclic
+GUI_K    ?= 3
+GUI_PORT ?= 8765
+dnet: $(if $(filter 1,$(GUI)),dnet-gui,$(DSTAMPS)/$(DNET_TAG).pass)
+dnet-gui: $(NETSIM_BIN)
+	python3 $(DNET)/run_netsim.py --gui --binary $(NETSIM_BIN) --scenario $(SCENARIO) --k $(GUI_K) \
+	  --port $(GUI_PORT) --out $(DBUILD)/netsim/gui
+# RUN=<dir>: replay that watch run's events.jsonl in the live view.
+dnet-view:
+	python3 $(DNET)/run_netsim.py --view $(or $(RUN),$(DBUILD)/netsim/gui)/events.jsonl --port $(GUI_PORT) --out /tmp
 $(DSTAMPS)/$(DNET_TAG).pass: $(DSTAMPS)/dsim.pass $(NETSIM_BIN) $(DNET_SRC) scripts/flowlib/netsim.py Makefile digital.mk
 	@mkdir -p $(DREPORTS) $(DLOGS) $(DSTAMPS) $(DNET_OUT)
 	@rm -f $@ $(DREPORTS)/$(DNET_TAG).json $(DNET_OUT)/results.json $(DNET_OUT)/fail_*

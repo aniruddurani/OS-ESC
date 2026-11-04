@@ -193,8 +193,8 @@ def _worker(args):
 
 def main(argv=None):
     p = argparse.ArgumentParser()
-    p.add_argument("--binary", required=True)
-    p.add_argument("--manifest", required=True)
+    p.add_argument("--binary")
+    p.add_argument("--manifest")
     p.add_argument("--size", choices=["quick", "soak"], default="quick")
     p.add_argument("--out", required=True)
     p.add_argument("--jobs", type=int, default=max(1, (os.cpu_count() or 2) - 2))
@@ -203,7 +203,20 @@ def main(argv=None):
     p.add_argument("--event-level", type=int, choices=[0, 1], default=0,
                    help="1: keep the RTL's events of the last 64 frames and write them out at the "
                         "first mismatch (slower)")
+    p.add_argument("--gui", action="store_true", help="watch mode: one scenario, paced, live view")
+    p.add_argument("--view", help="replay a watch run's events.jsonl in the live view")
+    p.add_argument("--scenario", default="cyclic")
+    p.add_argument("--k", type=int, default=DEFAULT_K)
+    p.add_argument("--frames", type=int, default=100_000)
+    p.add_argument("--port", type=int, default=8765)
     a = p.parse_args(argv)
+    if a.view or a.gui:
+        import watch
+        if a.view:
+            return watch.view(a.view, a.port)
+        return watch.watch(a.binary, a.scenario, a.k, a.seed, a.frames, a.port, a.out)
+    if not (a.binary and a.manifest):
+        p.error("--binary and --manifest are required")
     os.makedirs(a.out, exist_ok=True)
     runs = plan_runs(read_manifest(a.manifest), a.size, a.seed)
     if a.only:

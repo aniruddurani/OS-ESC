@@ -1,0 +1,450 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ESC Network Live</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --ink: #1c2330; --muted: #667085; --line: #d0d5dd;
+    --node: #eef2f7; --node-ink: #1c2330; --accent: #2f6fde; --ok: #1f9d55; --bad: #d64545;
+    --warn: #c98a12; --read: #3b82f6; --write: #ea7a1a; --esc: #e8f0ff; --frame: #b9c7e3;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f141b; --panel: #161d27; --ink: #e6ebf2; --muted: #93a0b4; --line: #2c3746;
+      --node: #1e2734; --node-ink: #e6ebf2; --accent: #6ea0ff; --ok: #3ccf7f; --bad: #ff6b6b;
+      --warn: #f0b43c; --read: #6ea8ff; --write: #ff9a45; --esc: #18243a; --frame: #34507e;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px;
+           padding: 12px 16px; border-bottom: 1px solid var(--line); background: var(--panel); }
+  h1 { font-size: 16px; margin: 0; font-weight: 650; }
+  .meta { color: var(--muted); font-size: 13px; }
+  .controls { display: flex; align-items: center; gap: 10px; margin-left: auto; flex-wrap: wrap; }
+  button { font: inherit; padding: 5px 12px; border-radius: 6px; border: 1px solid var(--line);
+           background: var(--node); color: var(--ink); cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  label { color: var(--muted); font-size: 13px; display: flex; align-items: center; gap: 6px; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); display: inline-block; }
+  .dot.on { background: var(--ok); } .dot.off { background: var(--bad); }
+  main { padding: 12px 16px 24px; max-width: 1400px; margin: 0 auto; }
+  .diagram { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
+  svg { display: block; width: 100%; height: auto; }
+  .grid { display: grid; gap: 12px; margin-top: 12px;
+          grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+  .panel h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted);
+              margin: 0 0 8px; font-weight: 600; }
+  .wide { grid-column: 1 / -1; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  td, th { padding: 2px 6px; text-align: left; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 500; }
+  td.n { text-align: right; font-family: var(--mono); }
+  .mono { font-family: var(--mono); font-size: 12px; word-break: break-all; }
+  .bad { color: var(--bad); font-weight: 600; } .ok { color: var(--ok); }
+  .flag { display: flex; align-items: center; gap: 8px; padding: 3px 0; }
+  .flag .dot.set { background: var(--bad); } .flag .dot.clear { background: var(--ok); }
+  #recent { max-height: 260px; overflow: auto; }
+  #recent tr { cursor: pointer; } #recent tr:hover { background: var(--node); }
+  #recent tr.sel { background: var(--esc); }
+  .heat { display: grid; grid-template-columns: repeat(16, 1fr); gap: 2px; }
+  .heat div { aspect-ratio: 1; background: var(--node); border-radius: 2px; }
+  .diff { background: color-mix(in srgb, var(--bad) 25%, transparent); color: var(--bad); }
+  .hint { color: var(--muted); font-size: 12px; }
+  svg text { fill: var(--node-ink); font-size: 13px; }
+  svg .lbl { fill: var(--muted); font-size: 12px; }
+  svg .node { fill: var(--node); stroke: var(--line); stroke-width: 1.5; }
+  svg .esc { fill: var(--esc); stroke: var(--accent); stroke-width: 2; }
+  svg .wire { stroke: var(--line); stroke-width: 3; fill: none; }
+  svg .block { fill: var(--node); stroke: var(--line); stroke-width: 1.5; transition: fill .25s, stroke .25s; }
+  svg .block.hot { fill: color-mix(in srgb, var(--accent) 22%, var(--node)); stroke: var(--accent); }
+  svg .block.wr { fill: color-mix(in srgb, var(--write) 30%, var(--node)); stroke: var(--write); }
+  svg .block.rd { fill: color-mix(in srgb, var(--read) 30%, var(--node)); stroke: var(--read); }
+  svg .escframe { fill: none; stroke: var(--frame); stroke-width: 1.5; stroke-dasharray: 6 5; }
+  svg .pkt rect { stroke: none; } svg .pkt text { fill: #fff; font-size: 11px; font-weight: 600; }
+  svg .pkt { cursor: pointer; }
+  svg .note { fill: var(--accent); font-size: 12px; font-family: var(--mono); }
+  @media (max-width: 700px) { .controls { margin-left: 0; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>ESC network — live</h1>
+  <span class="meta" id="meta">waiting for the simulation…</span>
+  <span class="meta"><span class="dot" id="conn"></span> <span id="connText">connecting</span></span>
+  <div class="controls">
+    <button id="pause" type="button">Pause</button>
+    <button id="step" type="button" title="one frame while paused">Step</button>
+    <label>Speed <input id="speed" type="range" min="-2" max="6" step="1" value="0" aria-label="speed">
+      <span id="speedTxt" class="mono">1×</span></label>
+    <label><input id="stopOnBad" type="checkbox" checked> pause on mismatch</label>
+  </div>
+</header>
+<main>
+  <div class="diagram">
+    <svg id="diagram" viewBox="0 0 1200 450" role="img"
+         aria-label="Block diagram: the master, the model slaves and the ESC under test, and inside the ESC its RTL blocks">
+      <g id="static"></g><g id="notes"></g><g id="packets"></g>
+    </svg>
+  </div>
+  <div class="grid">
+    <section class="panel"><h2>Traffic</h2><table id="totals"></table></section>
+    <section class="panel"><h2>Flags</h2><div id="flags"></div>
+      <p class="hint">Must stay clear within ±100 ppm.</p></section>
+    <section class="panel"><h2>Diag counters: RTL vs model</h2><table id="counters"><tr><td class="hint">after the first diag read</td></tr></table></section>
+    <section class="panel"><h2>Forwarding latency</h2><div id="latTxt" class="mono"></div>
+      <svg id="spark" viewBox="0 0 240 60" preserveAspectRatio="none" style="height:60px"></svg></section>
+    <section class="panel"><h2>Process RAM 0x1000–0x10FF</h2><div class="heat" id="heat"></div>
+      <p class="hint"><span style="color:var(--write)">■</span> write <span style="color:var(--read)">■</span> read</p></section>
+    <section class="panel"><h2>PHY clocks</h2><table id="clocks"></table></section>
+    <section class="panel wide"><h2>Recent frames</h2><div id="recent"><table><tbody id="recentBody"></tbody></table></div></section>
+    <section class="panel wide"><h2>Frame inspector</h2><div id="inspector" class="hint">Click a packet or a row.</div></section>
+  </div>
+</main>
+<script>
+"use strict";
+const NAMES = ["NOP","APRD","APWR","APRW","FPRD","FPWR","FPRW","BRD","BWR","BRW","LRD","LWR","LRW","ARMW","FRMW"];
+const BLOCKS = {1:"MII_RX",2:"RX_FIFO",3:"PARSER",4:"EXEC",5:"FMMU",6:"MEM",7:"TX_FIFO",8:"MII_TX"};
+const KINDS = {1:"frame start",2:"frame end",3:"datagram",4:"FMMU hit",5:"read",6:"write",7:"WKC +",8:"flag",9:"fault"};
+const FAULTS = ["runt","oversize","non-EtherCAT","malformed","rx_er"];
+const DIAG = ["frames","rx_errors","crc_failures","runts","oversize","non_ethercat","malformed",
+              "datagrams","addressed","wkc_increments","latency","trace_count"];
+const SVGNS = "http://www.w3.org/2000/svg";
+const $ = id => document.getElementById(id);
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+
+let cfg = null, speed = 1, paused = false;
+const packets = new Map();            // index -> packet record
+const recent = [];                    // newest first
+const lat = [];
+let selected = null, layout = null;
+
+function el(tag, attrs, parent, text) {
+  const e = document.createElementNS(SVGNS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  if (text !== undefined) e.textContent = text;
+  if (parent) parent.appendChild(e);
+  return e;
+}
+
+// --- frame decoding -------------------------------------------------------------
+function bytes(hex) { const b = new Uint8Array(hex.length / 2); for (let i = 0; i < b.length; i++) b[i] = parseInt(hex.substr(2 * i, 2), 16); return b; }
+function u16(b, o) { return b[o] | (b[o + 1] << 8); }
+function u32(b, o) { return (b[o] | (b[o + 1] << 8) | (b[o + 2] << 16) | (b[o + 3] << 24)) >>> 0; }
+function hx(n, w) { return "0x" + n.toString(16).toUpperCase().padStart(w, "0"); }
+function decode(hex) {
+  if (!hex) return null;
+  const b = bytes(hex);
+  if (b.length < 16) return { len: b.length, note: "too short", dgs: [] };
+  const etype = (b[12] << 8) | b[13];
+  if (etype !== 0x88A4) return { len: b.length, note: "EtherType " + hx(etype, 4), dgs: [] };
+  const word = u16(b, 14), total = word & 0x7FF, dgs = [];
+  let pos = 16, remain = total;
+  while (remain >= 12 && pos + 10 <= b.length) {
+    const n = u16(b, pos + 6) & 0x7FF;
+    if (pos + 12 + n > b.length) break;
+    const cmd = b[pos], addr = u32(b, pos + 2);
+    dgs.push({ pos, cmd, name: NAMES[cmd] || ("cmd " + cmd), idx: b[pos + 1], addr, n,
+               data: b.slice(pos + 10, pos + 10 + n), wkc: u16(b, pos + 10 + n) });
+    pos += 12 + n; remain -= 12 + n;
+  }
+  return { len: b.length, note: "", dgs, bytes: b };
+}
+function where(d) {
+  if (d.name[0] === "L") return "logical " + hx(d.addr, 8);
+  return (d.name[0] === "F" ? "station " : "pos ") + hx(d.addr & 0xFFFF, 4) + " : " + hx(d.addr >>> 16, 4);
+}
+function wkcOf(hex) { const f = decode(hex); return f ? f.dgs.reduce((s, d) => s + d.wkc, 0) : null; }
+function summary(p) {
+  const f = decode(p.hex_in);
+  if (!f || !f.dgs.length) return f ? f.note || "no datagrams" : "";
+  const d = f.dgs[0];
+  return d.name + " " + where(d) + " ×" + d.n + (f.dgs.length > 1 ? "  +" + (f.dgs.length - 1) + " more" : "");
+}
+
+// --- static diagram -------------------------------------------------------------
+function build() {
+  const g = $("static"); g.innerHTML = ""; $("notes").innerHTML = ""; $("packets").innerHTML = "";
+  const k = cfg ? cfg.k : 3, shown = k <= 6 ? k : 5;
+  const L = { fwd: 64, ret: 118, nodes: [], blocks: {} };
+  el("text", { x: 20, y: 26, class: "lbl" }, g, "Network (Python models)");
+  L.master = { x: 70, y: 91 };
+  L.esc = { x: 1110, y: 91 };
+  el("path", { d: `M 110 ${L.fwd} H 1052`, class: "wire" }, g);
+  el("path", { d: `M 1052 ${L.ret} H 110`, class: "wire" }, g);
+  el("text", { x: 560, y: L.fwd - 8, class: "lbl", "text-anchor": "middle" }, g, "forward: processed by every slave →");
+  el("text", { x: 560, y: L.ret + 18, class: "lbl", "text-anchor": "middle" }, g, "← return path (unchanged)");
+  const node = (x, w, label, sub, cls) => {
+    el("rect", { x: x - w / 2, y: 52, width: w, height: 78, rx: 8, class: cls || "node" }, g);
+    el("text", { x, y: 86, "text-anchor": "middle", "font-weight": 600 }, g, label);
+    return el("text", { x, y: 106, "text-anchor": "middle", class: "lbl" }, g, sub);
+  };
+  node(L.master.x, 84, "Master", "Python");
+  // up to six model slaves drawn; beyond that five and a "+N" node standing for the rest
+  const x0 = 210, x1 = 960, count = shown + (k > 6 ? 1 : 0);
+  for (let i = 0; i < count; i++) {
+    const x = count > 1 ? x0 + (x1 - x0) * i / (count - 1) : (x0 + x1) / 2;
+    const isGap = k > 6 && i === shown;
+    const sub = node(x, 92, isGap ? "+" + (k - shown) + " more" : "Slave " + i, "WKC –");
+    L.nodes.push({ x, slave: isGap ? k - 1 : i, sub });
+  }
+  node(L.esc.x, 120, "ESC", "RTL, last", "esc");
+  // inside the ESC
+  el("rect", { x: 20, y: 188, width: 1160, height: 246, rx: 12, class: "escframe" }, g);
+  el("text", { x: 36, y: 210, class: "lbl" }, g, "Inside the ESC under test — live from the RTL's own signals (Verilator)");
+  el("path", { d: `M ${L.esc.x} 130 V 188`, class: "wire", "stroke-dasharray": "4 4" }, g);
+  const row = 262, sub = 380;
+  const B = [["MII_RX", 100, row, "MII RX"], ["RX_FIFO", 270, row, "RX FIFO"], ["PARSER", 440, row, "Frame parser"],
+             ["EXEC", 640, row, "Datagram exec"], ["TX_FIFO", 850, row, "TX FIFO"], ["MII_TX", 1060, row, "MII TX"],
+             ["FMMU", 540, sub, "FMMU"], ["MEM", 740, sub, "Memory port"],
+             ["RAM", 900, sub, "RAM"], ["REGS", 990, sub, "Regs"], ["DIAGB", 1080, sub, "Diag"]];
+  for (const [id, x, y, label] of B) {
+    const small = ["RAM", "REGS", "DIAGB"].includes(id), w = small ? 76 : 140;
+    const r = el("rect", { x: x - w / 2, y: y - 26, width: w, height: 52, rx: 8, class: "block" }, g);
+    el("text", { x, y: y + 5, "text-anchor": "middle" }, g, label);
+    L.blocks[id] = { x, y, r };
+  }
+  for (let i = 0; i < 5; i++) {
+    const a = ["MII_RX", "RX_FIFO", "PARSER", "EXEC", "TX_FIFO"][i], b = ["RX_FIFO", "PARSER", "EXEC", "TX_FIFO", "MII_TX"][i];
+    el("path", { d: `M ${L.blocks[a].x + 70} ${row} H ${L.blocks[b].x - 70}`, class: "wire" }, g);
+  }
+  el("path", { d: `M 640 288 V 330 H 540 V 354 M 640 330 H 740 V 354 M 810 ${sub} H 862 M 862 ${sub - 14} V ${sub + 14}`, class: "wire" }, g);
+  el("path", { d: `M 938 ${sub} H 952 M 1028 ${sub} H 1042`, class: "wire" }, g);
+  L.noteParser = el("text", { x: 440, y: row + 46, "text-anchor": "middle", class: "note" }, $("notes"), "");
+  L.noteExec = el("text", { x: 640, y: row - 36, "text-anchor": "middle", class: "note" }, $("notes"), "");
+  L.noteMem = el("text", { x: 740, y: sub + 44, "text-anchor": "middle", class: "note" }, $("notes"), "");
+  L.noteFmmu = el("text", { x: 540, y: sub + 44, "text-anchor": "middle", class: "note" }, $("notes"), "");
+  layout = L;
+}
+
+// --- animation ------------------------------------------------------------------
+const active = [];
+function hop() { return Math.max(0.03, 0.3 / speed); }
+function flash(id, cls) {
+  const b = layout.blocks[id]; if (!b) return;
+  b.r.classList.add(cls || "hot");
+  clearTimeout(b.t); b.t = setTimeout(() => b.r.classList.remove("hot", "wr", "rd"), Math.max(120, 600 / speed));
+}
+function heat(addr, write) {
+  const i = addr - 0x1000; if (i < 0 || i > 255) return false;
+  const c = $("heat").children[i];
+  c.style.background = write ? css("--write") : css("--read");
+  c.style.transition = "none"; void c.offsetWidth;
+  c.style.transition = "background 2.5s"; c.style.background = "";
+  return true;
+}
+function rtlEffect(e) {
+  const [, block, kind, a, b] = e, name = BLOCKS[block];
+  if (name === "PARSER" && kind === 3) layout.noteParser.textContent = (NAMES[a & 0xFF] || a & 0xFF) + " " + hx(b >>> 0, 8) + " ×" + (a >> 8);
+  if (name === "PARSER" && kind === 9) layout.noteParser.textContent = "fault: " + FAULTS.filter((_, i) => a & (1 << i)).join(", ");
+  if (name === "FMMU") { flash("FMMU"); layout.noteFmmu.textContent = "hit r" + a.toString(2) + " w" + b.toString(2); }
+  if (name === "MEM") {
+    const write = kind === 6;
+    flash("MEM", write ? "wr" : "rd");
+    layout.noteMem.textContent = (write ? "write " : "read ") + hx(a, 4);
+    if (!heat(a, write)) flash(a >= 0x0E00 && a < 0x0F00 ? "DIAGB" : "REGS", write ? "wr" : "rd");
+    else flash("RAM", write ? "wr" : "rd");
+  }
+  if (name === "EXEC" && kind === 7) layout.noteExec.textContent = "WKC +" + a;
+  if (name && layout.blocks[name] && !["MEM", "FMMU"].includes(name)) flash(name);
+}
+function animate(p) {
+  if (!layout) return;
+  const L = layout, H = hop(), pts = [];
+  const color = p.match === false ? css("--bad") : (p.match ? css("--ok") : css("--accent"));
+  const g = el("g", { class: "pkt" }, $("packets"));
+  el("rect", { x: -24, y: -12, width: 48, height: 24, rx: 6, fill: color }, g);
+  const t = el("text", { x: 0, y: 4, "text-anchor": "middle" }, g, "#" + p.i);
+  g.addEventListener("click", () => select(p.i));
+  // waypoints: [x, y, seconds to get there, action]
+  pts.push([L.master.x + 44, L.fwd, 0]);
+  L.nodes.forEach((n, j) => pts.push([n.x, L.fwd, H, () => {
+    const w = p.hops ? p.hops[Math.min(n.slave + 1, p.hops.length - 1)] : null;
+    if (w !== null && w !== undefined) n.sub.textContent = "WKC " + w;
+    t.textContent = w !== null && w !== undefined ? "W" + w : "#" + p.i;
+  }]));
+  pts.push([L.esc.x - 60, L.fwd, H]);
+  pts.push([L.esc.x, 160, H * 0.6]);
+  const order = ["MII_RX", "RX_FIFO", "PARSER", "EXEC", "TX_FIFO", "MII_TX"];
+  const byBlock = {};
+  for (const e of p.rtl || []) {
+    let n = BLOCKS[e[1]]; if (n === "FMMU" || n === "MEM") n = "EXEC";
+    (byBlock[n] = byBlock[n] || []).push(e);
+  }
+  for (const id of order) {
+    const b = L.blocks[id], evs = byBlock[id] || [], dwell = H * (id === "EXEC" ? 1.6 : 0.8);
+    pts.push([b.x, b.y, H * 0.7, null]);
+    if (evs.length) pts.push([b.x, b.y, dwell, null, evs]);
+  }
+  pts.push([L.esc.x, 160, H * 0.6, () => { if (p.hex_out) t.textContent = "W" + wkcOf(p.hex_out); }]);
+  pts.push([L.esc.x - 60, L.ret, H * 0.5, () => g.querySelector("rect").setAttribute("fill",
+           p.match === false ? css("--bad") : css("--ok"))]);
+  pts.push([L.master.x + 44, L.ret, H * 1.6]);
+  active.push({ g, pts, seg: 1, t0: performance.now(), from: pts[0], evs: null, fired: 0 });
+  g.setAttribute("transform", `translate(${pts[0][0]},${pts[0][1]})`);
+}
+function tick(now) {
+  for (let i = active.length - 1; i >= 0; i--) {
+    const a = active[i];
+    if (a.seg >= a.pts.length) { a.g.remove(); active.splice(i, 1); continue; }
+    const to = a.pts[a.seg], dur = Math.max(1, to[2] * 1000), f = Math.min(1, (now - a.t0) / dur);
+    const x = a.from[0] + (to[0] - a.from[0]) * f, y = a.from[1] + (to[1] - a.from[1]) * f;
+    a.g.setAttribute("transform", `translate(${x},${y})`);
+    if (to[4]) {                                 // dwell: fire this block's RTL events across it
+      const due = Math.ceil(f * to[4].length);
+      while (a.fired < due) rtlEffect(to[4][a.fired++]);
+    }
+    if (f >= 1) {
+      if (to[3]) to[3]();
+      a.from = to; a.seg++; a.t0 = now; a.fired = 0;
+    }
+  }
+  requestAnimationFrame(tick);
+}
+
+// --- panels ---------------------------------------------------------------------
+function rows(id, list) {
+  $(id).innerHTML = list.map(([k, v, cls]) => `<tr><th>${k}</th><td class="n ${cls || ""}">${v}</td></tr>`).join("");
+}
+function stats(s) {
+  rows("totals", [["frames sent", s.sent], ["replies", s.replies],
+    ["mismatches", s.mismatches, s.mismatches ? "bad" : "ok"], ["missing", s.missing, s.missing ? "bad" : ""],
+    ["unexpected", s.unexpected, s.unexpected ? "bad" : ""], ["frames / s", s.fps.toFixed(1)],
+    ["simulated time", (s.sim_us / 1000).toFixed(3) + " ms"], ["core cycles", s.cycles.toLocaleString()]]);
+  const f = s.flags_seen;
+  $("flags").innerHTML = [["rx_overflow", 1], ["tx_overflow", 2], ["tx_underrun", 4], ["late (read data)", 8]]
+    .map(([n, bit]) => `<div class="flag"><span class="dot ${f & bit ? "set" : "clear"}"></span>${n}</div>`).join("");
+}
+function counters(p) {
+  const r = decode(p.hex_out), m = decode(p.expected || p.hex_out);
+  if (!r || !r.dgs.length || r.dgs[0].n < 24) return;
+  const rd = r.dgs[0].data, md = m && m.dgs.length ? m.dgs[0].data : rd;
+  $("counters").innerHTML = "<tr><th></th><th>RTL</th><th>model</th></tr>" + DIAG.map((n, i) => {
+    const a = u16(rd, 2 * i), b = u16(md, 2 * i), skip = n === "latency";
+    return `<tr><th>${n}</th><td class="n ${!skip && a !== b ? "bad" : ""}">${a}</td><td class="n">${skip ? "—" : b}</td></tr>`;
+  }).join("");
+}
+function latency(v) {
+  lat.push(v); if (lat.length > 60) lat.shift();
+  const max = Math.max(...lat), min = Math.min(...lat);
+  $("latTxt").textContent = `last ${v.toFixed(0)} ns   min ${min.toFixed(0)}   max ${max.toFixed(0)}`;
+  const span = Math.max(1, max - min);
+  $("spark").innerHTML = `<polyline fill="none" stroke="${css("--accent")}" stroke-width="2" points="${
+    lat.map((x, i) => `${i * 240 / 59},${55 - (x - min) / span * 50}`).join(" ")}"/>`;
+}
+function addRecent(p) {
+  recent.unshift(p); if (recent.length > 40) recent.pop();
+  renderRecent();
+}
+function renderRecent() {
+  // a list scrolled away from the top keeps showing the same rows as new ones arrive
+  const box = $("recent"), keep = box.scrollTop, before = box.scrollHeight;
+  requestAnimationFrame(() => { if (keep > 0) box.scrollTop = keep + box.scrollHeight - before; });
+  $("recentBody").innerHTML = recent.map(q => `<tr data-i="${q.i}" class="${q.i === selected ? "sel" : ""}">
+    <td class="n">#${q.i}</td><td class="${q.match === false ? "bad" : "ok"}">${q.match === false ? "mismatch" : "match"}</td>
+    <td>${q.fault ? "fault: " + q.fault : (q.diag ? "diag read" : "")}</td><td class="mono">${summary(q)}</td>
+    <td class="n">${q.latency_ns ? q.latency_ns.toFixed(0) + " ns" : ""}</td></tr>`).join("");
+}
+$("recentBody").addEventListener("click", e => { const tr = e.target.closest("tr"); if (tr) select(+tr.dataset.i); });
+
+function dataCells(got, exp) {
+  let s = "";
+  for (let i = 0; i < Math.min(got.length, 32); i++) {
+    const v = got[i].toString(16).padStart(2, "0");
+    s += exp && exp[i] !== got[i] ? `<span class="diff">${v}</span> ` : v + " ";
+  }
+  return s + (got.length > 32 ? "…" : "");
+}
+function select(i) {
+  selected = i;
+  const p = packets.get(i); if (!p) return;
+  const got = decode(p.hex_out), exp = p.match === false ? decode(p.expected) : null, inp = decode(p.hex_in);
+  let h = `<p><b>#${p.i}</b> — ${p.match === false ? '<span class="bad">does not match the model</span>' : '<span class="ok">matches the model</span>'}`
+        + `${p.fault ? " — injected fault: <b>" + p.fault + "</b>" : ""}${p.diag ? " — diag read" : ""}`
+        + ` — ${inp ? inp.len : "?"} bytes in, ${got ? got.len : "?"} out`
+        + `${p.latency_ns ? " — latency " + p.latency_ns.toFixed(0) + " ns" : ""}</p>`;
+  if (got && got.dgs.length) {
+    h += `<table><tr><th>#</th><th>cmd</th><th>address</th><th>len</th><th>WKC in</th><th>WKC out</th>`
+       + (exp ? "<th>WKC expected</th>" : "") + `<th>data out ${exp ? "(red: differs from model)" : ""}</th></tr>`;
+    got.dgs.forEach((d, j) => {
+      const e = exp && exp.dgs[j], di = inp && inp.dgs[j];
+      h += `<tr><td>${j}</td><td>${d.name}</td><td class="mono">${where(d)}</td><td class="n">${d.n}</td>`
+         + `<td class="n">${di ? di.wkc : ""}</td><td class="n ${e && e.wkc !== d.wkc ? "bad" : ""}">${d.wkc}</td>`
+         + (exp ? `<td class="n">${e ? e.wkc : "—"}</td>` : "")
+         + `<td class="mono">${dataCells(d.data, e && e.data)}</td></tr>`;
+    });
+    h += "</table>";
+  } else if (got) h += `<p class="hint">${got.note || "no datagrams"}</p>`;
+  if (exp && got && exp.len !== got.len) h += `<p class="bad">length: model ${exp.len}, RTL ${got.len}</p>`;
+  if (exp && got) {                         // raw bytes around the first difference (works for broken frames too)
+    const a = exp.bytes || bytes(p.expected), b = got.bytes || bytes(p.hex_out);
+    let first = 0; while (first < Math.min(a.length, b.length) && a[first] === b[first]) first++;
+    const from = Math.max(0, (first & ~15) - 16), to = Math.min(Math.max(a.length, b.length), from + 96);
+    const line = (x, y) => { let s = ""; for (let i = from; i < to; i++) {
+      if (i >= x.length) { s += "   "; continue; }
+      const v = x[i].toString(16).padStart(2, "0");
+      s += (i >= y.length || x[i] !== y[i]) ? `<span class="diff">${v}</span> ` : v + " "; } return s; };
+    h += `<p class="hint">bytes ${from}–${to - 1} (first difference at byte ${first})</p>`
+       + `<table><tr><th>model</th><td class="mono">${line(a, b)}</td></tr><tr><th>RTL</th><td class="mono">${line(b, a)}</td></tr></table>`;
+  }
+  if (p.rtl && p.rtl.length) {
+    const t0 = p.t0 || p.rtl[0][0];
+    h += `<details><summary>${p.rtl.length} RTL events</summary><table><tr><th>t (ns)</th><th>block</th><th>event</th><th>detail</th></tr>`
+       + p.rtl.slice(0, 400).map(e => `<tr><td class="n">${((e[0] - t0) / 1000).toFixed(0)}</td><td>${BLOCKS[e[1]]}</td><td>${KINDS[e[2]]}</td>`
+       + `<td class="mono">${e[2] === 3 ? (NAMES[e[3] & 0xFF] || e[3] & 0xFF) + " " + hx(e[4] >>> 0, 8) + " ×" + (e[3] >> 8)
+          : e[2] === 5 || e[2] === 6 ? hx(e[3], 4) : e[2] === 9 ? FAULTS.filter((_, i) => e[3] & (1 << i)).join(", ")
+          : e[2] === 4 ? "r " + e[3].toString(2) + " w " + e[4].toString(2) : e[2] === 7 ? e[3] : ""}</td></tr>`).join("")
+       + "</table></details>";
+  }
+  $("inspector").innerHTML = h;
+  renderRecent();
+}
+
+// --- events from the simulation -------------------------------------------------
+function onEvent(ev) {
+  if (ev.type === "config") {
+    cfg = ev;
+    $("meta").textContent = `${ev.scenario} · ${ev.k} model slave${ev.k === 1 ? "" : "s"} + ESC · seed ${ev.seed}`;
+    rows("clocks", [["rx_clk offset", ev.rx_ppm.toFixed(1) + " ppm"], ["tx_clk offset", ev.tx_ppm.toFixed(1) + " ppm"],
+                    ["drift", ev.drift.toFixed(1) + " ppm/s"], ["core clock", "100 MHz"], ["MII clocks", "25 MHz"]]);
+    build();
+  } else if (ev.type === "packet") {
+    packets.set(ev.i, ev);
+    if (packets.size > 2000) packets.delete(packets.keys().next().value);
+    if (!layout) build();
+    animate(ev);
+    addRecent(ev);
+    if (ev.latency_ns) latency(ev.latency_ns);
+    if (ev.diag) counters(ev);
+    if (ev.match === false) {
+      if (selected === null || packets.get(selected)?.match !== false) select(ev.i);
+      if ($("stopOnBad").checked && !paused) setPaused(true);
+    }
+  } else if (ev.type === "stats" || ev.type === "done") {
+    stats(Object.assign({ fps: 0, sim_us: 0, cycles: 0 }, ev));
+    if (ev.type === "done") $("meta").textContent += " · finished";
+  }
+}
+function post(body) {
+  return fetch("/control", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+}
+function setPaused(v) { paused = v; $("pause").textContent = v ? "Resume" : "Pause"; post({ pause: v }); }
+$("pause").onclick = () => setPaused(!paused);
+$("step").onclick = () => { if (!paused) setPaused(true); post({ step: 1 }); };
+$("speed").oninput = e => { speed = Math.pow(2, +e.target.value); $("speedTxt").textContent = speed + "×"; post({ speed }); };
+
+for (let i = 0; i < 256; i++) $("heat").appendChild(document.createElement("div"));
+build();
+requestAnimationFrame(tick);
+const src = new EventSource("/events");
+src.onopen = () => { $("conn").className = "dot on"; $("connText").textContent = "live"; };
+src.onerror = () => { $("conn").className = "dot off"; $("connText").textContent = "disconnected"; };
+src.onmessage = m => onEvent(JSON.parse(m.data));
+</script>
+</body>
+</html>
