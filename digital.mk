@@ -56,7 +56,7 @@ LASTMETRICS = $$(m=$(1); if [ -f $$m/final/metrics.json ]; then echo $$m/final/m
 
 dsynth: $(DSTAMPS)/dsynth_$(LLCFG).pass
 dpnr:   $(DSTAMPS)/dpnr_$(LLCFG).pass
-dall: dlint dsim dsynth dpnr
+dall: dlint dsim dnet dsynth dpnr
 
 # Yosys synthesis and its checks (no latches, no unmapped cells, no combinational loops).
 $(DSTAMPS)/dsynth_$(LLCFG).pass: $(DSTAMPS)/dsim.pass $(LL_SRC) Makefile digital.mk
@@ -98,6 +98,25 @@ $(NETSIM_BIN): $(DRTL) $(DNET_BENCH) Makefile digital.mk
 	  $(DRTL) $(sort $(wildcard $(DTB)/models/*.v)) $(DNET)/probes.vlt $(abspath $(DNET)/tb_netsim.cpp) \
 	  -Mdir $(NETSIM_OBJ) -o Vesc_top > $(DLOGS)/netsim_build.log 2>&1 \
 	  || { tail -n 30 $(DLOGS)/netsim_build.log; exit 1; }
+
+# The gate: every scenario in netsim/manifest.txt, its minimum frames, every reply equal to
+# the model's, no flags, every injected fault counted. NETSIM=soak for the long run.
+NETSIM      ?= quick
+NETSIM_ARGS ?=
+DNET_TAG    := $(if $(filter soak,$(NETSIM)),dnet_soak,dnet)
+DNET_OUT    := $(DBUILD)/netsim/$(NETSIM)
+DNET_SRC    := $(wildcard $(DNET)/*.py) $(DNET)/manifest.txt $(wildcard designs/$(DDESIGN)/model/*.py)
+
+.PHONY: dnet
+dnet: $(DSTAMPS)/$(DNET_TAG).pass
+$(DSTAMPS)/$(DNET_TAG).pass: $(DSTAMPS)/dsim.pass $(NETSIM_BIN) $(DNET_SRC) scripts/flowlib/netsim.py Makefile digital.mk
+	@mkdir -p $(DREPORTS) $(DLOGS) $(DSTAMPS) $(DNET_OUT)
+	@rm -f $@ $(DREPORTS)/$(DNET_TAG).json $(DNET_OUT)/results.json $(DNET_OUT)/fail_*
+	-python3 $(DNET)/run_netsim.py --binary $(NETSIM_BIN) --manifest $(DNET)/manifest.txt \
+	  --size $(NETSIM) --out $(DNET_OUT) $(NETSIM_ARGS) > $(DLOGS)/$(DNET_TAG).log 2>&1
+	$(PY) dnet --results $(DNET_OUT)/results.json --manifest $(DNET)/manifest.txt --size $(NETSIM) \
+	  --design $(DDESIGN) --out $(DREPORTS)/$(DNET_TAG).json
+	@touch $@
 
 # Tests of the bench and link themselves (not a gate).
 dnettest: $(NETSIM_BIN)

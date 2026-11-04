@@ -1,15 +1,17 @@
 """netsim chain of model slaves (network.py) and the reply checker (check.py)."""
+import copy
 import os
 import struct
 import sys
 import unittest
+import zlib
 
 ROOT = os.path.join(os.path.dirname(__file__), "..", "..", "designs", "ecat_esc")
 sys.path.insert(0, os.path.join(ROOT, "netsim"))
 sys.path.insert(0, os.path.join(ROOT, "model"))
 
-from ecat import CMD, Datagram, build_frame, parse_frame  # noqa: E402
-from check import Checker, fault_evidence, saturate  # noqa: E402
+from ecat import CMD, Datagram, SlaveModel, build_frame, parse_frame  # noqa: E402
+from check import Checker, diag_reply, fault_evidence, saturate  # noqa: E402
 from network import Chain  # noqa: E402
 
 US = 1_000_000          # 1 us in ps
@@ -87,6 +89,36 @@ class CheckerTest(unittest.TestCase):
     def test_fault_evidence_requires_every_class(self):
         errors = fault_evidence({"crc": 1}, {"crc_failures": 1}, require_all=True)
         self.assertTrue(any("runt" in e for e in errors))
+
+    def test_fill_takes_bytes_from_reply(self):
+        body = bytes(range(60))
+        exp = body + zlib.crc32(body).to_bytes(4, "little")
+        got_body = body[:30] + b"\xAA\xBB" + body[32:]
+        got = got_body + zlib.crc32(got_body).to_bytes(4, "little")
+        c = Checker()
+        c.expect(0, b"in", exp, fill=(30, 32))
+        c.on_sent({"index": 0, "t_start_ps": 0, "t_end_ps": 6 * US})
+        self.assertEqual(c.on_reply({"t_start_ps": US, "t_end_ps": 7 * US, "data": got}), 0)
+        self.assertEqual(c.metrics["mismatches"], 0)
+        bad_body = got_body[:5] + b"\x00" + got_body[6:]
+        c.expect(1, b"in", exp, fill=(30, 32))
+        c.on_sent({"index": 1, "t_start_ps": 10 * US, "t_end_ps": 16 * US})
+        c.on_reply({"t_start_ps": 11 * US, "t_end_ps": 17 * US,
+                    "data": bad_body + zlib.crc32(bad_body).to_bytes(4, "little")})
+        self.assertEqual(c.metrics["mismatches"], 1)
+
+    def test_diag_reply_fills_counters(self):
+        model = SlaveModel(ram_bytes=256)
+        model.process(frame())
+        model.counters.crc_failures = 70000                      # saturates
+        f = build_frame([Datagram(CMD["APRD"], 0, 0x0E000000, bytes(24))])
+        before, trace_len = copy.deepcopy(model.counters), len(model.trace)
+        expected = model.process(f)
+        exp, fill = diag_reply(expected, before, trace_len)
+        d = parse_frame(exp)[0]
+        vals = struct.unpack("<12H", d.data)
+        self.assertEqual((vals[0], vals[2], vals[7], vals[11]), (1, 65535, 1, trace_len))
+        self.assertEqual(fill, (26 + 20, 26 + 22))               # slot 10, the latency
 
     def test_saturated_counter_expected_value(self):
         self.assertEqual((saturate(70000), saturate(5), saturate(9, cnt_w=3)), (65535, 5, 7))

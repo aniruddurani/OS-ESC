@@ -1,5 +1,6 @@
 """netsim master and scenarios (master.py, scenarios.py)."""
 import os
+import struct
 import sys
 import tempfile
 import unittest
@@ -62,6 +63,13 @@ class MasterTest(unittest.TestCase):
         for cls in FAULTS:
             self.assertGreaterEqual(m.injected.get(cls, 0), 1, cls)
 
+    def test_fault_frames_have_their_fault(self):
+        for t in drain(Master("faults", seed=9, k=1, frames=2000)):
+            if t.fault == "oversize":
+                self.assertGreater(len(t.frame), MAX_FRAME)
+            elif t.fault == "runt":
+                self.assertLess(len(t.frame), MIN_FRAME)
+
     def test_fault_followed_by_good_frame(self):
         txs = drain(Master("faults", seed=4, k=1, frames=1000))
         for a, b in zip(txs, txs[1:]):
@@ -72,6 +80,21 @@ class MasterTest(unittest.TestCase):
         cmds = {c for c, _ in commands(drain(Master("random", seed=5, k=3, frames=2000)))}
         self.assertTrue({13, 14} <= cmds)
         self.assertTrue({CMD[n] for n in CMD} <= cmds)
+
+    def test_random_avoids_diag_window(self):
+        # The model has no diag block; the final read checks it against the model's counters.
+        txs = drain(Master("random", seed=8, k=3, frames=3000))[:-1]
+        for t in txs:
+            for d in parse_frame(t.frame):
+                if d.cmd not in (CMD["NOP"], CMD["LRD"], CMD["LWR"], CMD["LRW"]):    # physical
+                    ado = d.address >> 16
+                    self.assertFalse(ado < 0x0F00 and ado + len(d.data) > 0x0E00, hex(ado))
+                if (NAME.get(d.cmd) in ("FPWR", "APWR", "BWR", "FPRW", "APRW", "BRW")
+                        and d.address >> 16 == 0x0600):
+                    for i in range(0, len(d.data) - 15, 16):
+                        length, phys = struct.unpack_from("<H", d.data, i + 4)[0], \
+                            struct.unpack_from("<H", d.data, i + 8)[0]
+                        self.assertFalse(phys < 0x0F00 and phys + length > 0x0E00, hex(phys))
 
     def test_frames_within_limits(self):
         for s in ("startup", "cyclic", "random", "faults", "clocks", "chain"):

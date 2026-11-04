@@ -21,6 +21,8 @@ NIBBLES_PER_US = 25
 LBASE = 0x00010000                  # logical address of the first slave's process-data window
 AREA = MAX_FRAME - 4 - 14 - 2       # datagram bytes that fit one frame (headers and WKC included)
 ARMW, FRMW = 13, 14                 # commands the ESC does not implement
+DIAG_BASE, DIAG_END = 0x0E00, 0x0F00
+FMMU_BASE = 0x0600
 
 
 @dataclass
@@ -111,7 +113,7 @@ class Net:
             r, ram = self.rng, self.ram
             length = r.randint(1, 32)
             phys = r.choice([0x1000 + r.randrange(ram), 0x1000 + ram - length,
-                             0x1000 + ram - length + 1, 0x0FF0, 0x0E00, 0x1000])
+                             0x1000 + ram - length + 1, 0x0FF0, 0x0D00, 0x1000])
             logical = r.choice([LBASE + p * w + r.randint(-4, w), LBASE + r.randrange(64),
                                 r.randrange(1 << 32)])
             cfg += self.fmmu_entry(logical & 0xFFFFFFFF, length, phys & 0xFFFF, r.randint(0, 3),
@@ -161,9 +163,15 @@ class Net:
             span = (k + 1) * self.window
             return self.ldg(cmd, LBASE + r.randint(-32, span + 32), self.rand(n))
         ado = r.choice([r.randrange(0x1000), 0x1000 + r.randrange(ram), 0x1000 - r.randint(1, 16),
-                        0x1000 + ram - n, 0x1000 + ram - n + 1, 0x0E00 + r.randrange(0x100),
+                        0x1000 + ram - n, 0x1000 + ram - n + 1, 0x0D00 + r.randrange(0x100),
                         0x0600 + r.randrange(16 * self.n_fmmu), 0x0800 + r.randrange(8 * self.n_sm),
                         0x0000, 0x0010])
+        # The model has no diag block (0x0E00-0x0EFF; the final read checks it), and random
+        # bytes written to the FMMUs could map one onto it: such accesses move to process RAM.
+        fmmu_end = FMMU_BASE + 16 * self.n_fmmu
+        writes = cmd not in (CMD["APRD"], CMD["FPRD"], CMD["BRD"], ARMW, FRMW)
+        if (ado < DIAG_END and ado + n > DIAG_BASE) or (writes and ado < fmmu_end and ado + n > FMMU_BASE):
+            ado = 0x1000 + r.randrange(ram)
         if cmd in (CMD["APRD"], CMD["APWR"], CMD["APRW"]):
             adp = -r.randint(-1, k + 1)
         elif cmd in (CMD["FPRD"], CMD["FPWR"], CMD["FPRW"], FRMW):
@@ -221,7 +229,8 @@ def _fault(net, cls, good):
     if cls == "runt":
         return Tx(fcs(good[:r.randint(16, 59)]), fault=cls)
     if cls == "oversize":
-        big = net.frame([net.dg(CMD["NOP"], 0, 0, net.rand(r.randint(1475, 1560)))])
+        # a NOP of n bytes makes a 32 + n byte frame: over 1518 from n = 1487
+        big = net.frame([net.dg(CMD["NOP"], 0, 0, net.rand(r.randint(1487, 1560)))])
         return Tx(big, fault=cls)
     if cls == "non_ethercat":
         etype = r.choice([0x86DD, 0x88CC, 0x0800])
