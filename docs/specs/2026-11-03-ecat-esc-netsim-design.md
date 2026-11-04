@@ -1,6 +1,7 @@
 # ESC network simulation, with a live view
 
-Status: draft for review. Branch `feat/ecat-netsim`. Builds on
+Status: implemented on branch `feat/ecat-netsim`; quick gate and soak pass (2026-11-04:
+1,000,025 frames, 0 mismatches, about 7 min). Builds on
 `2026-10-31-ecat-esc-frame-core-design.md`, `2026-11-01-ecat-esc-memory-design.md` and
 `2026-11-01-ecat-esc-timing-design.md`.
 
