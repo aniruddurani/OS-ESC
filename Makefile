@@ -35,6 +35,7 @@ PY := PYTHONPATH=scripts python3 -m flowlib.cli
 
 test:
 	PYTHONPATH=scripts python3 -m unittest discover -s tests/unit -v
+	PYTHONPATH=designs/ecat_esc/model python3 -m unittest discover -s designs/ecat_esc/model
 
 env:
 	bash scripts/check_env.sh build/env.json \
@@ -176,3 +177,5 @@ $(STAMPS)/netlist.pass: $(SCH) $(SYM) Makefile
 	  --design $(DESIGN) --out $(REPORTS)/netlist.json
 	@touch $@
 
+
+-include digital.mk
