@@ -259,6 +259,22 @@ class FrameValidityTest(unittest.TestCase):
         self.assertFalse(fcs_ok(out))
         self.assertEqual(s.counters.malformed, 1)
 
+    def test_datagram_reaching_into_the_fcs_does_not_crash(self):
+        # The parser (like frame_parse.v) counts the FCS bytes as frame bytes, so a datagram
+        # can end inside them; what it writes there is dropped with the old FCS.
+        s = SlaveModel()
+        raw = bytearray(build_frame([Datagram(CMD["APWR"], 1, adp_ado(0, 0x0010), b"\x34\x12")]))
+        self.assertEqual(len(raw), 64)
+        raw[14:16] = struct.pack("<H", (1 << 12) | (14 + 12 + 22))
+        raw[30:40] = struct.pack("<BBIHH", CMD["NOP"], 2, 0, 22, 0)  # 30 + 10 + 22 + 2 = 64
+        raw[-4:] = zlib.crc32(bytes(raw[:-4])).to_bytes(4, "little")
+        out = s.process(bytes(raw))
+        self.assertEqual(len(out), len(raw))
+        self.assertEqual(s.station_address, 0x1234)
+        # position field incremented, WKC 1, the NOP's bytes untouched
+        self.assertEqual(out[:60], bytes(raw[:18]) + b"\x01\x00" + bytes(raw[20:28]) + b"\x01\x00"
+                         + bytes(raw[30:60]))
+
     def test_bad_fcs_writes_land_and_frame_is_poisoned(self):
         s = SlaveModel()
         raw = bytearray(build_frame([Datagram(CMD["APWR"], 1, adp_ado(0, 0x0010), b"\x34\x12")]))

@@ -281,7 +281,9 @@ class SlaveModel:
         if _fcs(raw[:-4]) != raw[-4:]:
             c.crc_failures += 1
             poison = True
-        body = bytearray(raw[:-4])
+        # Datagrams run over the whole frame, FCS bytes included (a datagram can end inside
+        # them); the core then drops the last four bytes and sends a fresh FCS.
+        body = bytearray(raw)
         if len(raw) >= 14:
             if struct.unpack_from(">H", raw, 12)[0] != ETHERTYPE:
                 c.non_ethercat += 1
@@ -304,6 +306,7 @@ class SlaveModel:
                     struct.pack_into("<BBIHH", body, pos, o.cmd, o.idx, o.address, word, o.irq)
                     body[pos + 10:pos + 10 + len(o.data)] = o.data
                     struct.pack_into("<H", body, pos + 10 + len(o.data), o.wkc)
+        body = body[:-4]
         fcs = _fcs(bytes(body))
         if poison:
             fcs = bytes(b ^ 0xFF for b in fcs)
