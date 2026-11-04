@@ -91,6 +91,26 @@ class BenchTest(unittest.TestCase):
                 finally:
                     link.close()
 
+    def test_phy_clock_offsets_below_50_ppm(self):
+        # A half period of 20,000 ps rounded to whole picoseconds moves in 50 ppm steps; the
+        # clock must keep the offset it was given (here 20 ppm) to well under that.
+        f = max_frame(0)
+
+        def durations(ppm):
+            link = Link(BIN, dict(DEFAULT_CONFIG, rx_ppm=ppm, tx_ppm=ppm))
+            try:
+                link.send(f, ifg=24)
+                sent, replies, _, _ = link.run(1, 10**9)
+                return (sent[0]["t_end_ps"] - sent[0]["t_start_ps"],
+                        replies[0]["t_end_ps"] - replies[0]["t_start_ps"])
+            finally:
+                link.close()
+
+        base, off = durations(0.0), durations(20.0)
+        want = wire_ps(len(f)) * 20e-6          # about 2.4 ns longer over the frame
+        for b, o, name in zip(base, off, ("rx", "tx")):
+            self.assertAlmostEqual(o - b, want, delta=want * 0.1, msg=name)
+
     def test_run_ends_with_one_status(self):
         sent, replies, events, status = self.link.run(0, 1_000_000)
         self.assertEqual((sent, replies, events), ([], [], []))

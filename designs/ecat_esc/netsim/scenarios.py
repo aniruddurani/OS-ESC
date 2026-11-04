@@ -21,6 +21,7 @@ NIBBLES_PER_US = 25
 LBASE = 0x00010000                  # logical address of the first slave's process-data window
 AREA = MAX_FRAME - 4 - 14 - 2       # datagram bytes that fit one frame (headers and WKC included)
 ARMW, FRMW = 13, 14                 # commands the ESC does not implement
+MIN_IFG = 16                        # 64 bit times: the shortest gap after a repeater shrinks 96
 DIAG_BASE, DIAG_END = 0x0E00, 0x0F00
 FMMU_BASE = 0x0600
 
@@ -28,7 +29,7 @@ FMMU_BASE = 0x0600
 @dataclass
 class Tx:
     frame: bytes
-    ifg: int = 24                   # idle nibbles after the frame (>= 24; 25,000 is 1 ms)
+    ifg: int = 24                   # idle nibbles after the frame (>= 16; 25,000 is 1 ms)
     er_nibble: int = -1             # rx_er on this data nibble, -1 for none
     fault: str = None               # one of FAULTS, or None for a good frame
 
@@ -202,20 +203,24 @@ def _cyclic(net):
         c += 1
 
 
+def _random_frame(net):
+    """One random-traffic frame; one in twenty re-programs the DUT's FMMUs at random."""
+    r = net.rng
+    if r.random() < 0.05:
+        return net.frame([net.dg(CMD["FPWR"], -net.k, 0x0600, net.fmmu_layout(net.k, True))])
+    dgs = []
+    for _ in range(r.randint(1, 6)):
+        room = AREA - net.size(dgs)
+        if room < 13:
+            break
+        dgs.append(net.random_datagram(room))
+    return net.frame(dgs)
+
+
 def _random(net):
     yield from net.startup()
-    r = net.rng
     while True:
-        if r.random() < 0.05:              # re-program the DUT's FMMUs with a random layout
-            yield Tx(net.frame([net.dg(CMD["FPWR"], -net.k, 0x0600, net.fmmu_layout(net.k, True))]))
-            continue
-        dgs = []
-        for _ in range(r.randint(1, 6)):
-            room = AREA - net.size(dgs)
-            if room < 13:
-                break
-            dgs.append(net.random_datagram(room))
-        yield Tx(net.frame(dgs))
+        yield Tx(_random_frame(net))
 
 
 def _fault(net, cls, good):
@@ -244,34 +249,37 @@ def _fault(net, cls, good):
 
 
 def _faults(net):
-    """Every fourth frame carries a fault, the classes taking turns in a shuffled order;
-    the frames between are good process-data frames."""
+    """Every fourth frame carries a fault, the classes taking turns in a shuffled order.
+    Good frames and the frames faults are made from are process data or, half the time,
+    random traffic (physical writes, FMMU re-layouts); a quarter of gaps are the minimum."""
     yield from net.startup()
     r = net.rng
     order = []
     i = 0
     while True:
-        good = net.frame(net.lrw())
+        good = net.frame(net.lrw()) if r.random() < 0.5 else _random_frame(net)
+        ifg = MIN_IFG if r.random() < 0.25 else 24
         if i % 4 == 3:
             if not order:
                 order = list(FAULTS)
                 r.shuffle(order)
-            yield _fault(net, order.pop(), good)
+            yield replace(_fault(net, order.pop(), good), ifg=ifg)
         else:
-            yield Tx(good)
+            yield Tx(good, ifg)
         i += 1
 
 
 def _clocks(net):
     """Maximum-size frames back to back (an LRW padded with a NOP to 1518 bytes), with a
-    short process-data frame every eighth."""
+    short process-data frame every eighth and the minimum gap before it. Only that one gap
+    is short: a stream of minimum gaps into a slower transmitter has no slack to drain."""
     yield from net.startup()
     c = 0
     while True:
         dgs = net.lrw()
         if c % 8:
             dgs.append(net.dg(CMD["NOP"], 0, 0, bytes(AREA - net.size(dgs) - 12)))
-        yield Tx(net.frame(dgs))
+        yield Tx(net.frame(dgs), MIN_IFG if c % 8 == 7 else 24)
         c += 1
 
 

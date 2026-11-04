@@ -76,6 +76,23 @@ class MasterTest(unittest.TestCase):
             if a.fault:
                 self.assertIsNone(b.fault)
 
+    def test_faults_cut_physical_writes_and_relayout_fmmus(self):
+        # A truncated frame must also cut physical writes (the model's _execute_cut), and the
+        # good traffic must re-program the DUT's FMMUs, not only run the fixed LRW window.
+        txs = drain(Master("faults", seed=3, k=3, frames=4000))
+        cut = {t.frame[16] for t in txs if t.fault == "truncated" and len(t.frame) > 16}
+        self.assertTrue({CMD["APWR"], CMD["FPWR"], CMD["BWR"]} & cut, sorted(cut))
+        good = commands([t for t in txs[40:] if t.fault is None])
+        self.assertIn(CMD["FPWR"], {c for c, a in good if a >> 16 == 0x0600})
+
+    def test_faults_and_clocks_send_minimum_gaps(self):
+        # 16 nibbles is the shortest gap a receiver must take (a repeater may shrink 96 bit
+        # times to 64); the RTL's own transmitter sends it when a frame is waiting.
+        for s in ("faults", "clocks"):
+            gaps = [t.ifg for t in drain(Master(s, seed=2, k=3, frames=1000))]
+            self.assertIn(16, set(gaps), s)
+            self.assertGreaterEqual(min(gaps), 16, s)
+
     def test_random_uses_unsupported_commands(self):
         cmds = {c for c, _ in commands(drain(Master("random", seed=5, k=3, frames=2000)))}
         self.assertTrue({13, 14} <= cmds)
@@ -102,7 +119,7 @@ class MasterTest(unittest.TestCase):
                 if t.fault is None:
                     self.assertTrue(MIN_FRAME <= len(t.frame) <= MAX_FRAME, s)
                     parse_frame(t.frame)
-                    self.assertGreaterEqual(t.ifg, 24)
+                    self.assertGreaterEqual(t.ifg, 16)
 
     def test_clock_config_bounds(self):
         for seed in range(100):

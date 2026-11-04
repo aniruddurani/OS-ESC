@@ -38,7 +38,7 @@ PART_FRAMES = 50_000            # longest single run; longer scenarios are split
 DIAG_NAMES = ("frames", "rx_errors", "crc_failures", "runts", "oversize", "non_ethercat",
               "malformed", "datagrams", "datagrams_addressed", "wkc_increments", "latency",
               "trace_count")
-RING = 32                        # frames kept for a failure pcap
+RING = 32                        # frames before the first failure kept for its pcap
 
 
 def read_manifest(path):
@@ -92,13 +92,30 @@ def write_events(path, events):
             f.write(json.dumps(dict(t=e["t_ps"], block=e["block"], kind=e["kind"], a=e["a"], b=e["b"])) + "\n")
 
 
+def failure_window(recent, index):
+    """[(timestamp, frame)] of the frame `index` (the last one sent if None), the RING
+    frames before it and their replies, in time order."""
+    if index is None or index not in recent:
+        index = next(reversed(recent), None)
+    if index is None:
+        return []
+    packets = []
+    for i in range(index - RING, index + 1):
+        if i in recent:
+            sent_ts, frame, replies = recent[i]
+            packets += [(sent_ts, frame)] + replies
+    return sorted(packets, key=lambda p: p[0])
+
+
 def run_one(spec, binary, out_dir, write_pcaps, event_level=0):
     start = time.time()
     config = dict(clock_config(spec["scenario"], spec["seed"]), event_level=event_level)
     res = dict(spec, config=config, metrics={}, injected={}, diag={}, failures=[], sim_ps=0,
                wall_s=0.0, cycles=0, error="")
     link = None
-    packets, ring = [], collections.deque(maxlen=2 * RING)
+    packets = []
+    recent = collections.OrderedDict()      # frame index -> [sent time, input, [replies]]
+    window = None
     try:
         link = Link(binary, config)
         chain = Chain(spec["k"])
@@ -111,6 +128,8 @@ def run_one(spec, binary, out_dir, write_pcaps, event_level=0):
         def absorb(sent, replies, status_):
             for s in sent:
                 checker.on_sent(s)
+                if s["index"] in recent:
+                    recent[s["index"]][0] = s["t_start_ps"] / 1e12
             for r in replies:
                 if sabotage[0] == "drop-reply":
                     sabotage[0] = None
@@ -119,7 +138,8 @@ def run_one(spec, binary, out_dir, write_pcaps, event_level=0):
                 if owner is not None and owner == final_index:
                     res["diag"] = parse_diag(r["data"])
                 ts = r["t_start_ps"] / 1e12
-                ring.append((ts, r["data"]))
+                if owner in recent:
+                    recent[owner][2].append((ts, r["data"]))
                 if write_pcaps:
                     packets.append((ts, r["data"]))
             checker.on_status(status_)
@@ -147,8 +167,10 @@ def run_one(spec, binary, out_dir, write_pcaps, event_level=0):
                 checker.expect(sent_n, dut_input, expected, fill)
                 if is_final:
                     final_index = sent_n
-                ts = (status["t_ps"] if status else 0) / 1e12
-                ring.append((ts, dut_input))
+                ts = (status["t_ps"] if status else 0) / 1e12      # until SENT gives the time
+                recent[sent_n] = [ts, dut_input, []]
+                while len(recent) > 2 * BATCH + RING:
+                    recent.popitem(last=False)
                 if write_pcaps:
                     packets.append((ts, dut_input))
                 sent_n += 1
@@ -159,7 +181,7 @@ def run_one(spec, binary, out_dir, write_pcaps, event_level=0):
             absorb(s, r, status)
             if checker.failures and not res["failures"]:
                 res["failures"] = list(checker.failures)        # first failure: keep the frames before it
-                res["ring"] = list(ring)
+                window = failure_window(recent, checker.failures[0]["index"])
                 if event_level:                                 # and the RTL's events around it
                     events, _ = link.dump()
                     write_events(os.path.join(out_dir, f"fail_{run_name(spec)}.events.jsonl"), events)
@@ -179,9 +201,11 @@ def run_one(spec, binary, out_dir, write_pcaps, event_level=0):
     name = run_name(spec)
     if write_pcaps and packets:
         write_pcap(os.path.join(out_dir, name + ".pcap"), packets)
-    ring_frames = res.pop("ring", list(ring))
     if res["failures"] or res["error"]:
-        write_pcap(os.path.join(out_dir, f"fail_{name}.pcap"), ring_frames)
+        if window is None:          # an error, or a failure found only when the run closed
+            first = res["failures"][0]["index"] if res["failures"] else None
+            window = failure_window(recent, first)
+        write_pcap(os.path.join(out_dir, f"fail_{name}.pcap"), window)
         with open(os.path.join(out_dir, f"fail_{name}.json"), "w") as f:
             json.dump(dict(scenario=spec["scenario"], k=spec["k"], seed=spec["seed"],
                            frames=spec["frames"], config=config, error=res["error"],

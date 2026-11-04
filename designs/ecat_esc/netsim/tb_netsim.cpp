@@ -62,17 +62,22 @@ constexpr double MII_PERIOD_PS = 40000.0;   // 25 MHz
 constexpr uint64_t CORE_HALF_PS = 5000;     // 100 MHz
 
 // A PHY clock: nominal 25 MHz off by `ppm`, which walks by `drift` ppm per simulated second
-// and reflects at +-bound (the configured offset's size).
+// and reflects at +-bound (the configured offset's size). Edges are kept at their ideal time
+// and only rounded to the picosecond grid when scheduled, so offsets below the 50 ppm that
+// one picosecond of a half period is are simulated, not rounded away.
 struct PhyClock {
     double ppm = 0, bound = 0, drift = 0;
     int dir = 1;
-    uint64_t next = 0, half = 20000;
+    double edge = 0, half = 20000;
+    uint64_t next = 0;
     bool level = false;
+    void start(double t) { edge = t; next = static_cast<uint64_t>(std::llround(edge)); }
+    void advance() { edge += half; next = static_cast<uint64_t>(std::llround(edge)); }
     void set_period() {
-        uint64_t period = 2 * static_cast<uint64_t>(std::llround(MII_PERIOD_PS * (1 + ppm * 1e-6) / 2));
+        double period = MII_PERIOD_PS * (1 + ppm * 1e-6);
         half = period / 2;
         if (drift != 0) {
-            ppm += dir * drift * static_cast<double>(period) * 1e-12;
+            ppm += dir * drift * period * 1e-12;
             if (ppm > bound) { ppm = 2 * bound - ppm; dir = -1; }
             if (ppm < -bound) { ppm = -2 * bound - ppm; dir = 1; }
         }
@@ -102,8 +107,8 @@ public:
     void configure(const proto::Config& c) {
         rx_.ppm = c.rx_ppm; rx_.bound = std::fabs(c.rx_ppm); rx_.drift = c.drift_ppm_per_s;
         tx_.ppm = c.tx_ppm; tx_.bound = std::fabs(c.tx_ppm); tx_.drift = c.drift_ppm_per_s;
-        rx_.next = static_cast<uint64_t>(std::llround(c.rx_phase_ns * 1000));
-        tx_.next = static_cast<uint64_t>(std::llround(c.tx_phase_ns * 1000));
+        rx_.start(c.rx_phase_ns * 1000);
+        tx_.start(c.tx_phase_ns * 1000);
         core_next_ = static_cast<uint64_t>(std::llround(c.core_phase_ns * 1000));
         rx_.set_period();
         tx_.set_period();
@@ -220,12 +225,12 @@ private:
         if (rx_e) {
             rx_.level = !rx_.level; top_->rx_clk = rx_.level;
             if (rx_.level) rx_.set_period();
-            rx_.next = t + rx_.half;
+            rx_.advance();
         }
         if (tx_e) {
             tx_.level = !tx_.level; top_->tx_clk = tx_.level;
             if (tx_.level) tx_.set_period();
-            tx_.next = t + tx_.half;
+            tx_.advance();
         }
         top_->eval();
         if (core_rise) {
