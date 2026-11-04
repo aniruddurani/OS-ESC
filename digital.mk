@@ -56,7 +56,7 @@ LASTMETRICS = $$(m=$(1); if [ -f $$m/final/metrics.json ]; then echo $$m/final/m
 
 dsynth: $(DSTAMPS)/dsynth_$(LLCFG).pass
 dpnr:   $(DSTAMPS)/dpnr_$(LLCFG).pass
-dall: dlint dsim dsynth dpnr
+dall: dlint dsim dnet dsynth dpnr
 
 # Yosys synthesis and its checks (no latches, no unmapped cells, no combinational loops).
 $(DSTAMPS)/dsynth_$(LLCFG).pass: $(DSTAMPS)/dsim.pass $(LL_SRC) Makefile digital.mk
@@ -80,6 +80,58 @@ $(DSTAMPS)/dpnr_$(LLCFG).pass: $(DSTAMPS)/dsynth_$(LLCFG).pass
 dconfigs:
 	@for c in min default max; do $(MAKE) --no-print-directory dpnr LLCFG=$$c || true; done
 	$(PY) dconfigs --design $(DDESIGN) --clock-period $(CORE_PERIOD) 	  --metrics min=$(LLRUNS)/pnr_min/final/metrics.json 	  --metrics default=$(LLRUNS)/pnr_default/final/metrics.json 	  --metrics max=$(LLRUNS)/pnr_max/final/metrics.json 	  --out $(DREPORTS)/configs.json
+
+# --- netsim: esc_top in a simulated EtherCAT network (designs/<DDESIGN>/netsim) ------
+# A Verilator bench (tb_netsim.cpp) runs the RTL with real clock ratios and exchanges
+# whole frames with a Python network over a pipe.
+DNET          := designs/$(DDESIGN)/netsim
+NETSIM_PARAMS ?= -GN_FMMU=3 -GN_SM=4 -GRAM_BYTES=256 -GDIAG_EN=1
+NETSIM_OBJ    := $(DBUILD)/netsim/obj
+NETSIM_BIN    := $(NETSIM_OBJ)/Vesc_top
+DNET_BENCH    := $(DNET)/tb_netsim.cpp $(DNET)/proto.h $(DNET)/probes.vlt
+
+.PHONY: dnettest
+$(NETSIM_BIN): $(DRTL) $(DNET_BENCH) Makefile digital.mk
+	@mkdir -p $(NETSIM_OBJ) $(DLOGS)
+	@verilator --cc --exe --build -O3 -j 0 --top-module esc_top $(NETSIM_PARAMS) \
+	  -Wno-fatal -Wno-lint -Wno-style -CFLAGS "-O2 -std=c++17" \
+	  $(DRTL) $(sort $(wildcard $(DTB)/models/*.v)) $(DNET)/probes.vlt $(abspath $(DNET)/tb_netsim.cpp) \
+	  -Mdir $(NETSIM_OBJ) -o Vesc_top > $(DLOGS)/netsim_build.log 2>&1 \
+	  || { tail -n 30 $(DLOGS)/netsim_build.log; exit 1; }
+
+# The gate: every scenario in netsim/manifest.txt, its minimum frames, every reply equal to
+# the model's, no flags, every injected fault counted. NETSIM=soak for the long run.
+NETSIM      ?= quick
+NETSIM_ARGS ?=
+DNET_TAG    := $(if $(filter soak,$(NETSIM)),dnet_soak,dnet)
+DNET_OUT    := $(DBUILD)/netsim/$(NETSIM)
+DNET_SRC    := $(wildcard $(DNET)/*.py) $(DNET)/manifest.txt $(wildcard designs/$(DDESIGN)/model/*.py)
+
+.PHONY: dnet dnet-gui dnet-view
+# GUI=1: watch mode with the live view on http://127.0.0.1:$(GUI_PORT) (not a gate).
+GUI      ?=
+SCENARIO ?= cyclic
+GUI_K    ?= 3
+GUI_PORT ?= 8765
+dnet: $(if $(filter 1,$(GUI)),dnet-gui,$(DSTAMPS)/$(DNET_TAG).pass)
+dnet-gui: $(NETSIM_BIN)
+	python3 $(DNET)/run_netsim.py --gui --binary $(NETSIM_BIN) --scenario $(SCENARIO) --k $(GUI_K) \
+	  --port $(GUI_PORT) --out $(DBUILD)/netsim/gui
+# RUN=<dir>: replay that watch run's events.jsonl in the live view.
+dnet-view:
+	python3 $(DNET)/run_netsim.py --view $(or $(RUN),$(DBUILD)/netsim/gui)/events.jsonl --port $(GUI_PORT) --out /tmp
+$(DSTAMPS)/$(DNET_TAG).pass: $(DSTAMPS)/dsim.pass $(NETSIM_BIN) $(DNET_SRC) scripts/flowlib/netsim.py Makefile digital.mk
+	@mkdir -p $(DREPORTS) $(DLOGS) $(DSTAMPS) $(DNET_OUT)
+	@rm -f $@ $(DREPORTS)/$(DNET_TAG).json $(DNET_OUT)/results.json $(DNET_OUT)/fail_*
+	-python3 $(DNET)/run_netsim.py --binary $(NETSIM_BIN) --manifest $(DNET)/manifest.txt \
+	  --size $(NETSIM) --out $(DNET_OUT) $(NETSIM_ARGS) > $(DLOGS)/$(DNET_TAG).log 2>&1
+	$(PY) dnet --results $(DNET_OUT)/results.json --manifest $(DNET)/manifest.txt --size $(NETSIM) \
+	  --design $(DDESIGN) --out $(DREPORTS)/$(DNET_TAG).json
+	@touch $@
+
+# Tests of the bench and link themselves (not a gate).
+dnettest: $(NETSIM_BIN)
+	NETSIM_BIN=$(NETSIM_BIN) python3 -m unittest discover -s $(DNET)/tests -v
 
 # Proves the digital gates catch real faults (see scripts/selftest_digital.sh).
 dselftest:

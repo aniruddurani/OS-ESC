@@ -176,13 +176,17 @@ class SlaveModel:
         return bytes(buf[off:off + n])
 
     # --- datagram execution ------------------------------------------------
-    def _execute(self, dg):
-        c = self.counters
+    def _execute(self, dg, passed=None):
+        """The datagram as it leaves. `passed`: the frame ended after this many of its data
+        bytes; only they are written, and the unfinished datagram is not counted."""
+        whole = passed is None
+        c = self.counters if whole else Counters()
+        trace = self.trace if whole else []
         c.datagrams += 1
         name = NAME.get(dg.cmd, "NOP")
         out = replace(dg)
         if name == "NOP":
-            self.trace.append((dg.cmd, dg.address, len(dg.data), 0, False))
+            trace.append((dg.cmd, dg.address, len(dg.data), 0, False))
             return out
         addressed_here = False
         op = name[-2:]
@@ -190,6 +194,7 @@ class SlaveModel:
         read_hit = write_hit = False
         data = bytearray(dg.data)
         n = len(dg.data)
+        limit = n if whole else passed
 
         if name[0] != "L":
             adp, ado = dg.address & 0xFFFF, dg.address >> 16
@@ -214,11 +219,11 @@ class SlaveModel:
                             if name[0] == "B" else bytearray(old)
                         read_hit = True
                     if writes:
-                        self._write(span, dg.data)
+                        self._write(span, dg.data[:limit])
                         write_hit = True
         else:
             hit_any = False
-            took_r, took_w = [False] * n, [False] * n   # lowest FMMU owns each byte
+            rd_at, wr_at = [None] * n, [None] * n       # lowest FMMU owns each byte
             for i in range(self.n_fmmu):
                 base = FMMU_BASE + FMMU_SIZE * i
                 start, length, _sb, _eb, phys, _pb, ftype, act = \
@@ -231,17 +236,20 @@ class SlaveModel:
                     continue
                 a, b = lo - dg.address, hi - dg.address
                 if reads and ftype & 1:
-                    chunk = self._read(span, hi - lo)
                     for k in range(a, b):
-                        if not took_r[k]:
-                            data[k], took_r[k] = chunk[k - a], True
+                        rd_at[k] = rd_at[k] or (span[0], span[1] + k - a)
                     read_hit = hit_any = True
                 if writes and ftype & 2:
                     for k in range(a, b):
-                        if not took_w[k]:
-                            self._write((span[0], span[1] + k - a), dg.data[k:k + 1])
-                            took_w[k] = True
+                        wr_at[k] = wr_at[k] or (span[0], span[1] + k - a)
                     write_hit = hit_any = True
+            # Byte by byte in stream order, read then write, as rtl/dgram_exec.v does: a
+            # later byte mapped onto the same physical byte reads the earlier byte's write.
+            for k in range(n):
+                if rd_at[k]:
+                    data[k] = self._read(rd_at[k], 1)[0]
+                if wr_at[k] and k < limit:
+                    self._write(wr_at[k], dg.data[k:k + 1])
             if hit_any:
                 c.datagrams_addressed += 1
                 addressed_here = True
@@ -250,8 +258,32 @@ class SlaveModel:
         c.wkc_increments += inc
         out.data = bytes(data)
         out.wkc = (dg.wkc + inc) & 0xFFFF
-        self.trace.append((dg.cmd, dg.address, len(dg.data), inc, addressed_here))
+        trace.append((dg.cmd, dg.address, len(dg.data), inc, addressed_here))
         return out
+
+    def _execute_cut(self, raw, body, pos):
+        """The datagram at `pos` that did not fit: the frame ends inside it, or its length
+        overruns the EtherCAT length. rtl/dgram_exec.v acts on each byte as it passes: the
+        position field of an AP or B command is incremented; if the header is complete and
+        the datagram fits the EtherCAT length, each data byte that passed is read or written
+        as in a whole datagram. It never finishes, so it is not counted."""
+        end = len(raw)
+        if end >= pos + 4 and NAME.get(raw[pos], "NOP")[0] in "AB":
+            adp = struct.unpack_from("<H", raw, pos + 2)[0]
+            struct.pack_into("<H", body, pos + 2, (adp + 1) & 0xFFFF)
+        if end < pos + 10:
+            return
+        cmd, idx, addr, lw, irq = struct.unpack_from("<BBIHH", raw, pos)
+        n = lw & 0x7FF
+        remain = (struct.unpack_from("<H", raw, 14)[0] & 0x7FF) - (pos - 16)
+        if remain - 10 < n + 2:
+            return
+        passed = min(n, end - pos - 10)
+        wkc = raw[pos + 10 + n] if end > pos + 10 + n else 0
+        o = self._execute(Datagram(cmd, idx, addr, bytes(raw[pos + 10:pos + 10 + n]).ljust(n, b"\0"),
+                                   irq, wkc=wkc), passed=passed)
+        out = struct.pack("<BBIHH", o.cmd, o.idx, o.address, lw, irq) + o.data + struct.pack("<H", o.wkc)
+        body[pos:end] = out[:end - pos]
 
     # --- frame ----------------------------------------------------------
     def process(self, raw, rx_err=False):
@@ -281,7 +313,9 @@ class SlaveModel:
         if _fcs(raw[:-4]) != raw[-4:]:
             c.crc_failures += 1
             poison = True
-        body = bytearray(raw[:-4])
+        # Datagrams run over the whole frame, FCS bytes included (a datagram can end inside
+        # them); the core then drops the last four bytes and sends a fresh FCS.
+        body = bytearray(raw)
         if len(raw) >= 14:
             if struct.unpack_from(">H", raw, 12)[0] != ETHERTYPE:
                 c.non_ethercat += 1
@@ -292,18 +326,15 @@ class SlaveModel:
                 if malformed:
                     c.malformed += 1
                     poison = True
-                    # The position field of an auto-increment or broadcast datagram
-                    # is incremented as it passes, before its bad length is seen.
-                    if (bad_pos is not None and len(raw) - bad_pos >= 4
-                            and NAME.get(raw[bad_pos], "NOP")[0] in "AB"):
-                        adp = struct.unpack_from("<H", body, bad_pos + 2)[0]
-                        struct.pack_into("<H", body, bad_pos + 2, (adp + 1) & 0xFFFF)
                 for pos, dg in items:
                     o = self._execute(dg)
                     word = len(o.data) | (0x4000 if o.circ else 0) | (0x8000 if o.more else 0)
                     struct.pack_into("<BBIHH", body, pos, o.cmd, o.idx, o.address, word, o.irq)
                     body[pos + 10:pos + 10 + len(o.data)] = o.data
                     struct.pack_into("<H", body, pos + 10 + len(o.data), o.wkc)
+                if bad_pos is not None:
+                    self._execute_cut(raw, body, bad_pos)
+        body = body[:-4]
         fcs = _fcs(bytes(body))
         if poison:
             fcs = bytes(b ^ 0xFF for b in fcs)

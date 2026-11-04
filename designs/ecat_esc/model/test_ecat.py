@@ -204,6 +204,19 @@ class LogicalTest(unittest.TestCase):
         self.assertEqual(out.data, b"\x01\x02\x03\x04\x07\x06")
         self.assertEqual(out.wkc, 1)
 
+    def test_logical_bytes_on_one_physical_byte_run_in_stream_order(self):
+        # rtl/dgram_exec.v reads and then writes each byte as it passes, so a later byte
+        # mapped onto the same physical byte reads what the earlier byte wrote (seen in the
+        # netsim soak, random seed 2, frame 3510, two FMMUs mapped onto 0x1000).
+        s = SlaveModel(ram_bytes=64)
+        set_fmmu(s, 0, logical=0x101, length=1, physical=0x1000, rd=True, wr=True)
+        set_fmmu(s, 1, logical=0x100, length=2, physical=0x1000, rd=True, wr=True)
+        s.ram[0] = 0x55
+        out = run(s, [Datagram(CMD["LRW"], 1, 0x100, b"\xa0\xa1")])[0]
+        self.assertEqual(out.data, b"\x55\xa0")     # byte 1 reads byte 0's write
+        self.assertEqual(s.ram[0], 0xA1)            # the last write wins
+        self.assertEqual(out.wkc, 3)
+
     def test_fmmu_window_beyond_ram_fails(self):
         s = SlaveModel(ram_bytes=8)
         set_fmmu(s, 0, logical=0x100, length=4, physical=0x1000 + 6, rd=True)
@@ -258,6 +271,63 @@ class FrameValidityTest(unittest.TestCase):
         self.assertEqual(s.station_address, 0x1234)
         self.assertFalse(fcs_ok(out))
         self.assertEqual(s.counters.malformed, 1)
+
+    # A frame that ends inside a datagram (a runt, or a frame cut short) after the datagram's
+    # header has passed and fit the EtherCAT length: like rtl/dgram_exec.v, the bytes that passed
+    # were read or written as they went by, the four the core takes for the FCS included. The
+    # datagram never finished, so it is not counted.
+    @staticmethod
+    def cut_frame(dg, keep):
+        raw = build_frame([dg])
+        return raw[:keep]
+
+    def test_frame_cut_inside_a_write_lands_the_bytes_that_passed(self):
+        s = SlaveModel(ram_bytes=256)
+        data = bytes(range(1, 33))
+        raw = self.cut_frame(Datagram(CMD["APWR"], 1, adp_ado(0, 0x1000), data), 50)
+        out = s.process(raw)
+        self.assertEqual(bytes(s.ram[:32]), data[:24] + bytes(8))    # bytes 26..49 passed
+        self.assertEqual(out[:46], raw[:18] + b"\x01\x00" + raw[20:46])
+        self.assertFalse(fcs_ok(out))
+        c = s.counters
+        self.assertEqual((c.datagrams, c.datagrams_addressed, c.wkc_increments, c.malformed, c.runts),
+                         (0, 0, 0, 1, 1))
+        self.assertEqual(s.trace, [])
+
+    def test_frame_cut_inside_a_read_inserts_the_bytes_that_passed(self):
+        s = SlaveModel(ram_bytes=256)
+        s.ram[:32] = bytes(range(100, 132))
+        raw = self.cut_frame(Datagram(CMD["FPRD"], 1, adp_ado(0, 0x1000), bytes(32)), 50)
+        out = s.process(raw)
+        self.assertEqual(out[26:46], bytes(range(100, 120)))
+        self.assertEqual(len(out), 50)
+
+    def test_frame_cut_inside_a_logical_read_write(self):
+        s = SlaveModel(ram_bytes=256)
+        set_fmmu(s, 0, 0x10000, 32, 0x1000, rd=True, wr=True)
+        s.ram[:32] = bytes(range(100, 132))
+        data = bytes(range(1, 33))
+        raw = self.cut_frame(Datagram(CMD["LRW"], 1, 0x10000, data), 52)
+        out = s.process(raw)
+        self.assertEqual(out[26:48], bytes(range(100, 122)))       # old memory read out
+        self.assertEqual(bytes(s.ram[:32]), data[:26] + bytes(range(126, 132)))
+        self.assertEqual(s.counters.wkc_increments, 0)
+
+    def test_datagram_reaching_into_the_fcs_does_not_crash(self):
+        # The parser (like frame_parse.v) counts the FCS bytes as frame bytes, so a datagram
+        # can end inside them; what it writes there is dropped with the old FCS.
+        s = SlaveModel()
+        raw = bytearray(build_frame([Datagram(CMD["APWR"], 1, adp_ado(0, 0x0010), b"\x34\x12")]))
+        self.assertEqual(len(raw), 64)
+        raw[14:16] = struct.pack("<H", (1 << 12) | (14 + 12 + 22))
+        raw[30:40] = struct.pack("<BBIHH", CMD["NOP"], 2, 0, 22, 0)  # 30 + 10 + 22 + 2 = 64
+        raw[-4:] = zlib.crc32(bytes(raw[:-4])).to_bytes(4, "little")
+        out = s.process(bytes(raw))
+        self.assertEqual(len(out), len(raw))
+        self.assertEqual(s.station_address, 0x1234)
+        # position field incremented, WKC 1, the NOP's bytes untouched
+        self.assertEqual(out[:60], bytes(raw[:18]) + b"\x01\x00" + bytes(raw[20:28]) + b"\x01\x00"
+                         + bytes(raw[30:60]))
 
     def test_bad_fcs_writes_land_and_frame_is_poisoned(self):
         s = SlaveModel()

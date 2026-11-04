@@ -1,0 +1,10 @@
+# Scenarios the dnet gate requires: minimum frames in the quick run and in the soak.
+# `total` bounds the sum; the runner spreads frames over the scenarios to reach it.
+# scenario  quick   soak
+startup     1000    20000
+cyclic      1000    400000
+random      1000    300000
+faults      1000    100000
+clocks      1000    100000
+chain       1000    80000
+total       20000   1000000

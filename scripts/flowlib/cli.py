@@ -170,6 +170,32 @@ def cmd_dsim(a):
     return write_report(a.out, "dsim", a.design, status, r, errors, a.results)
 
 
+def cmd_dnet(a):
+    """dnet: the network simulation's results.json against its manifest. The fault-evidence
+    rule is the netsim's own (check.py beside the manifest), so the gate and the runner
+    apply the same one."""
+    import importlib.util
+    from flowlib.netsim import evaluate, read_manifest
+    stage = "dnet" if a.size == "quick" else f"dnet_{a.size}"
+    text, manifest_text = _read(a.results), _read(a.manifest)
+    if text is None or manifest_text is None:
+        gone = a.results if text is None else a.manifest
+        return write_report(a.out, stage, a.design, "error", {},
+                            [{"message": f"simulation evidence missing: {gone}"}], a.results)
+    try:
+        results = json.loads(text)
+    except ValueError as e:
+        return write_report(a.out, stage, a.design, "error", {},
+                            [{"message": f"results unreadable: {e}"}], a.results)
+    check_py = a.check or os.path.join(os.path.dirname(os.path.abspath(a.manifest)), "check.py")
+    spec = importlib.util.spec_from_file_location("netsim_check", check_py)
+    check = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(check)
+    status, metrics, errors = evaluate(results, read_manifest(manifest_text), a.size,
+                                       check.fault_evidence)
+    return write_report(a.out, stage, a.design, status, metrics, errors, a.results)
+
+
 def cmd_dmetrics(a):
     """dsynth / dpnr: every --zero metric must be 0 and every --nonneg metric
     >= 0, read from LibreLane's metrics.json."""
@@ -369,6 +395,15 @@ def build_parser():
     s.add_argument("--design", required=True)
     s.add_argument("--out", required=True)
     s.set_defaults(func=cmd_dsim)
+
+    s = sub.add_parser("dnet")
+    s.add_argument("--results", required=True)
+    s.add_argument("--manifest", required=True)
+    s.add_argument("--size", choices=["quick", "soak"], required=True)
+    s.add_argument("--check", help="netsim check.py (default: the one beside the manifest)")
+    s.add_argument("--design", required=True)
+    s.add_argument("--out", required=True)
+    s.set_defaults(func=cmd_dnet)
 
     s = sub.add_parser("dconfigs")
     s.add_argument("--metrics", action="append", required=True, help="NAME=path to final metrics.json")

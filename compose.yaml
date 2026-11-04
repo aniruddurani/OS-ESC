@@ -11,5 +11,8 @@ services:
     volumes:
       - ./:/foss/designs/silicon-flow
     working_dir: /foss/designs/silicon-flow
+    # The netsim live view (./flow dnet GUI=1), reachable from this PC only.
+    ports:
+      - "127.0.0.1:8765:8765"
     security_opt:
       - seccomp=unconfined

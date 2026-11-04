@@ -73,31 +73,51 @@ async def test_rx_tx_roundtrip_random_frames(dut):
     assert mon.bad_framing == 0
 
 
-@cocotb.test()
-async def test_tx_inserts_interframe_gap(dut):
-    await start(dut)
-    low_runs, run, seen_frame = [], 0, False
+def watch_gaps(dut):
+    """Collects the idle runs (nibble times with tx_en low) between frames."""
+    low_runs, state = [], dict(run=0, seen=False)
 
     async def watch():
-        nonlocal run, seen_frame
         while True:
             await RisingEdge(dut.clk)
             if int(dut.tx_en.value) == 1:
-                if seen_frame and run:
-                    low_runs.append(run)
-                run, seen_frame = 0, True
+                if state["seen"] and state["run"]:
+                    low_runs.append(state["run"])
+                state.update(run=0, seen=True)
             else:
-                run += 1
+                state["run"] += 1
 
     cocotb.start_soon(watch())
+    return low_runs
+
+
+@cocotb.test()
+async def test_tx_inserts_interframe_gap(dut):
+    await start(dut)
+    low_runs = watch_gaps(dut)
     for k in range(3):
         await send(dut, frame_bytes(60, 50 + k))
     await idle(dut.clk, 60)
     assert len(low_runs) == 2
-    # Frames waiting to go out must follow after exactly the minimum gap (24 nibble
-    # times = 12 bytes), not one nibble more: an extra nibble per frame would
-    # back up the transmit FIFO under sustained minimum-gap traffic.
-    assert low_runs == [24, 24], f"gaps (nibble times) {low_runs}, need exactly 24"
+    # A frame already waiting goes out after the shortest gap, 16 nibble times (8 bytes):
+    # a transmit clock up to 100 ppm slower than the receive clock then still keeps up
+    # with minimum-gap 1518-byte frames instead of backing up the transmit FIFO.
+    assert low_runs == [16, 16], f"gaps (nibble times) {low_runs}, need exactly 16"
+
+
+@cocotb.test()
+async def test_tx_late_frame_starts_mid_gap(dut):
+    # A frame that arrives after the shortest gap has passed starts at once; one that
+    # arrives before waits for it; with nothing waiting the full 12-byte gap is idle.
+    await start(dut)
+    low_runs = watch_gaps(dut)
+    await send(dut, frame_bytes(60, 60))
+    while int(dut.tx_en.value) == 1:                     # the end of the first frame
+        await RisingEdge(dut.clk)
+    await idle(dut.clk, 19)
+    await send(dut, frame_bytes(60, 61))
+    await idle(dut.clk, 60)
+    assert len(low_runs) == 1 and 19 <= low_runs[0] <= 22, f"gap {low_runs}, frame waited too long"
 
 
 @cocotb.test()

@@ -1,0 +1,39 @@
+`verilator_config
+// Internal signals the bench reads for the live view and the `late` flag. public_flat_rd keeps
+// them visible without touching rtl/. tb_netsim.cpp reads them through the generated root
+// members, so a renamed signal is a build error, never a run without events.
+
+// MII receive output (rx_clk), RX FIFO output and core output (clk)
+public_flat_rd -module "esc_top" -var "r_valid"
+public_flat_rd -module "esc_top" -var "r_first"
+public_flat_rd -module "esc_top" -var "r_last"
+public_flat_rd -module "esc_top" -var "in_v"
+public_flat_rd -module "esc_top" -var "in_d"
+public_flat_rd -module "esc_top" -var "c_valid"
+public_flat_rd -module "esc_top" -var "c_first"
+public_flat_rd -module "esc_top" -var "c_last"
+
+// frame parser: datagram headers and frame events
+public_flat_rd -module "frame_parse" -var "dg_hdr_done"
+public_flat_rd -module "frame_parse" -var "dg_cmd"
+public_flat_rd -module "frame_parse" -var "dg_addr"
+public_flat_rd -module "frame_parse" -var "dg_len"
+public_flat_rd -module "frame_parse" -var "ev_end"
+public_flat_rd -module "frame_parse" -var "ev_runt"
+public_flat_rd -module "frame_parse" -var "ev_oversize"
+public_flat_rd -module "frame_parse" -var "ev_non_ethercat"
+public_flat_rd -module "frame_parse" -var "ev_malformed"
+public_flat_rd -module "frame_parse" -var "ev_rx_err"
+
+// memory port and datagram results
+public_flat_rd -module "esc_core" -var "mem_req"
+public_flat_rd -module "esc_core" -var "mem_we"
+public_flat_rd -module "esc_core" -var "mem_addr"
+public_flat_rd -module "esc_core" -var "ev_dg"
+public_flat_rd -module "esc_core" -var "ev_wkc_inc"
+
+// FMMU plan and the access engine's late flag
+public_flat_rd -module "dg_access" -var "plan_done"
+public_flat_rd -module "dg_access" -var "hr"
+public_flat_rd -module "dg_access" -var "hw"
+public_flat_rd -module "dg_access" -var "late"
