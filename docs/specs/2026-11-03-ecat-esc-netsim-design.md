@@ -15,7 +15,7 @@ nibble from Python (about one large frame per second), so it cannot do this.
 
 This milestone builds that simulation, a live view of it, and an audit of the model
 against the LAN9253 datasheet. The next milestone runs the same master and scenarios on
-a Cyclone 10 LP board (section 9).
+a Terasic DE2-115 board (section 9).
 
 ## 2. Goals and success criteria
 
@@ -248,11 +248,22 @@ numbers and paraphrase; the datasheet is not quoted or copied into the repo. Eve
 
 ## 9. Next milestone (not in this spec)
 
-The same master, scenarios and GUI on an Intel Cyclone 10 LP Evaluation Kit
-(EK-10CL025U256): Quartus Prime Lite, the unchanged RTL behind an RGMII-to-MII adapter at
-100 Mbit, a Windows Npcap transport. A Yosys estimate puts the default configuration at
-about 9.0k LUT4 and 7.2k flip-flops of 24.6k LEs. The core must run at 75 MHz or more
-(6 clocks per 80 ns byte); whether the 10CL025 closes that is unknown until Quartus runs.
+The same master, scenarios and GUI on a Terasic DE2-115 (Cyclone IV E EP4CE115F29C7,
+114k LEs): Quartus Prime Lite, a Windows Npcap transport, and the unchanged RTL on port 0's
+Marvell 88E1111 PHY, jumpered to MII mode (the board manual's JP1/JP2; check on the board)
+so the PHY's 25 MHz nibble clocks drive `esc_top` directly, with no RGMII adapter. The
+second PHY is spare until multi-port forwarding. A Yosys estimate puts the default
+configuration at about 9.0k LUT4 and 7.2k flip-flops, under 10% of the device.
+
+Board-level work, all outside the core: pin assignments, a PLL from the 50 MHz oscillator
+to the core clock, reset, the PHY reset pin, and a small MDIO block that restricts the
+88E1111's advertisement to 100 Mbit full duplex (by default it advertises 1000 Mbit,
+which MII cannot carry; forcing the host NIC to 100 full is the fallback). The core must
+run at 75 MHz or more (6 clocks per 80 ns byte); whether the -7 device closes that is
+unknown until Quartus runs.
+
+This replaces the earlier Cyclone 10 LP Evaluation Kit (EK-10CL025U256) target, which
+needed an RGMII-to-MII adapter and would have been about 40% full.
 
 ## 10. Risks
 
