@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Prove the digital gates catch real faults: three known-bad inputs must each fail the
-# gate built for them, and a failure must stop the stages after it.
+# Prove the digital gates catch real faults: each known-bad input must fail the gate
+# built for them (dlint, dsim, dpnr, and six for dnet), and a failure must stop the
+# stages after it.
 # Run inside the container via `make dselftest`. Prints DSELFTEST PASS or exits 1.
 set -u
 cd "$(dirname "$0")/.."
@@ -51,6 +52,62 @@ expect "make exit code is non-zero" "$(nonzero $?)" yes
 expect "dsynth status" "$(status_of $ROOT/tight/reports/dsynth_selftest_tight.json)" pass
 expect "dpnr status" "$(status_of $ROOT/tight/reports/dpnr_selftest_tight.json)" fail
 expect "dpnr names setup timing" "$(grep -c 'timing__setup' $ROOT/tight/reports/dpnr_selftest_tight.json | sed 's/^[1-9].*/yes/;s/^0$/no/')" yes
+
+# --- dnet: the network simulation must catch faults on its own -----------------------
+# Each RTL mutant must be lint-clean (so a lint failure cannot pass for a catch). dsim is
+# then skipped by stamping it, because dsim catches some of these too and the point here
+# is that dnet does; the stamp lives only under build/dselftest.
+metric_of() {  # metric_of <report.json> <key> -> the metric's value, or "none"
+  python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['metrics'][sys.argv[2]])" "$1" "$2" 2>/dev/null || echo none
+}
+
+net_mutant() {  # net_mutant <name> <file> <present-pattern> <sed expression>
+  local name=$1 file=$2 pat=$3 expr=$4
+  mkdir -p $ROOT/rtl_$name
+  cp designs/ecat_esc/rtl/*.v $ROOT/rtl_$name/
+  expect "mutation present before" "$(grep -c -- "$pat" $ROOT/rtl_$name/$file)" 1
+  sed -i -- "$expr" $ROOT/rtl_$name/$file
+  expect "mutation applied" "$(grep -c -- "$pat" $ROOT/rtl_$name/$file)" 0
+  make dlint DRTL_DIR=$ROOT/rtl_$name DBUILD=$ROOT/$name >/dev/null 2>&1
+  expect "dlint status (the mutant is lint-clean)" "$(status_of $ROOT/$name/reports/dlint.json)" pass
+  touch $ROOT/$name/stamps/dsim.pass
+  make dnet DRTL_DIR=$ROOT/rtl_$name DBUILD=$ROOT/$name >/dev/null 2>&1
+  expect "make exit code is non-zero" "$(nonzero $?)" yes
+  expect "dnet status" "$(status_of $ROOT/$name/reports/dnet.json)" fail
+  expect "no dnet pass stamp" "$([ ! -e $ROOT/$name/stamps/dnet.pass ] && echo yes || echo no)" yes
+}
+
+echo "net_wkc: a working counter one short on LRW only must fail dnet with mismatches"
+net_mutant net_wkc dgram_exec.v "(wr_ok ? (is_rd ? 2'd2 : 2'd1)" \
+  "s/(wr_ok ? (is_rd ? 2'd2 : 2'd1)/(wr_ok ? (is_rd ? (cmd_l ? 2'd1 : 2'd2) : 2'd1)/"
+expect "mismatches > 0" "$(metric_of $ROOT/net_wkc/reports/dnet.json mismatches | sed 's/^[1-9][0-9]*$/yes/')" yes
+
+echo "net_gap: a transmitter that always waits the full 12-byte gap must fail dnet at 100 ppm"
+net_mutant net_gap mii_tx.v "GAP_MIN = 5'd15" "s/GAP_MIN = 5'd15/GAP_MIN = 5'd23/"
+expect "flags_seen has overflow or underrun" "$(metric_of $ROOT/net_gap/reports/dnet.json flags_seen | python3 -c "import sys; v=sys.stdin.read().strip(); print('yes' if v.isdigit() and int(v) & 6 else 'no')")" yes
+
+echo "net_txfifo: four-entry FIFOs must fail dnet with an overflow or underrun flag"
+net_mutant net_txfifo esc_top.v "parameter FIFO_DEPTH  = 16" "s/parameter FIFO_DEPTH  = 16/parameter FIFO_DEPTH  = 4/"
+expect "flags_seen has overflow or underrun" "$(metric_of $ROOT/net_txfifo/reports/dnet.json flags_seen | python3 -c "import sys; v=sys.stdin.read().strip(); print('yes' if v.isdigit() and int(v) & 7 else 'no')")" yes
+
+echo "net_diagfcs: a CRC-failure counter that never counts must fail dnet's fault evidence"
+net_mutant net_diagfcs diag.v "c_crc_failures <= sat_add(c_crc_failures, 2'd1)" \
+  "s/c_crc_failures <= sat_add(c_crc_failures, 2'd1)/c_crc_failures <= sat_add(c_crc_failures, 2'd0)/"
+expect "an error names crc in the fault evidence" "$(grep -c 'fault evidence: .*crc' $ROOT/net_diagfcs/reports/dnet.json | sed 's/^[1-9].*/yes/;s/^0$/no/')" yes
+
+# The checker itself: the unchanged RTL and bench, with one fault injected into the harness.
+for sab in checker drop-reply; do
+  name=net_$sab
+  echo "$name: --sabotage $sab must fail dnet"
+  mkdir -p $ROOT/$name/stamps
+  touch $ROOT/$name/stamps/dlint.pass $ROOT/$name/stamps/dsim.pass
+  make dnet DBUILD=$ROOT/$name NETSIM_BIN=$(pwd)/build/ecat_esc/netsim/obj/Vesc_top \
+    NETSIM_ARGS="--sabotage $sab" >/dev/null 2>&1
+  expect "make exit code is non-zero" "$(nonzero $?)" yes
+  expect "dnet status" "$(status_of $ROOT/$name/reports/dnet.json)" fail
+done
+expect "net_checker mismatches" "$(metric_of $ROOT/net_checker/reports/dnet.json mismatches)" 1
+expect "net_drop-reply missing" "$(metric_of $ROOT/net_drop-reply/reports/dnet.json missing)" 1
 
 if [ "$failures" -eq 0 ]; then
   echo "DSELFTEST PASS"

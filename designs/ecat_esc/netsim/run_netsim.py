@@ -106,11 +106,15 @@ def run_one(spec, binary, out_dir, write_pcaps, event_level=0):
         checker = Checker()
         final_index, generated, sent_n = None, 0, 0
         status0 = status = None
+        sabotage = [spec.get("sabotage")]       # self-test only: one fault the gate must catch
 
         def absorb(sent, replies, status_):
             for s in sent:
                 checker.on_sent(s)
             for r in replies:
+                if sabotage[0] == "drop-reply":
+                    sabotage[0] = None
+                    continue
                 owner = checker.on_reply(r)
                 if owner is not None and owner == final_index:
                     res["diag"] = parse_diag(r["data"])
@@ -136,6 +140,9 @@ def run_one(spec, binary, out_dir, write_pcaps, event_level=0):
                 fill = None
                 if is_final and expected is not None:
                     expected, fill = diag_reply(expected, before, trace_len)
+                if sabotage[0] == "checker" and expected is not None:
+                    sabotage[0] = None
+                    expected = bytes([expected[0] ^ 1]) + expected[1:]
                 link.send(dut_input, ifg=tx.ifg, er_nibble=tx.er_nibble)
                 checker.expect(sent_n, dut_input, expected, fill)
                 if is_final:
@@ -203,6 +210,8 @@ def main(argv=None):
     p.add_argument("--event-level", type=int, choices=[0, 1], default=0,
                    help="1: keep the RTL's events of the last 64 frames and write them out at the "
                         "first mismatch (slower)")
+    p.add_argument("--sabotage", choices=["checker", "drop-reply"],
+                   help="self-test only: flip one expected byte, or drop one reply, in the first run")
     p.add_argument("--gui", action="store_true", help="watch mode: one scenario, paced, live view")
     p.add_argument("--view", help="replay a watch run's events.jsonl in the live view")
     p.add_argument("--scenario", default="cyclic")
@@ -221,6 +230,8 @@ def main(argv=None):
     runs = plan_runs(read_manifest(a.manifest), a.size, a.seed)
     if a.only:
         runs = [r for r in runs if run_name(r) == a.only]
+    if a.sabotage and runs:
+        runs[0]["sabotage"] = a.sabotage
     start = time.time()
     jobs = [(r, a.binary, a.out, a.size == "quick", a.event_level) for r in runs]
     with multiprocessing.Pool(min(a.jobs, len(jobs) or 1)) as pool:
