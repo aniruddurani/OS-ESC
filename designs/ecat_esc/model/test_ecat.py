@@ -204,6 +204,19 @@ class LogicalTest(unittest.TestCase):
         self.assertEqual(out.data, b"\x01\x02\x03\x04\x07\x06")
         self.assertEqual(out.wkc, 1)
 
+    def test_logical_bytes_on_one_physical_byte_run_in_stream_order(self):
+        # rtl/dgram_exec.v reads and then writes each byte as it passes, so a later byte
+        # mapped onto the same physical byte reads what the earlier byte wrote (seen in the
+        # netsim soak, random seed 2, frame 3510, two FMMUs mapped onto 0x1000).
+        s = SlaveModel(ram_bytes=64)
+        set_fmmu(s, 0, logical=0x101, length=1, physical=0x1000, rd=True, wr=True)
+        set_fmmu(s, 1, logical=0x100, length=2, physical=0x1000, rd=True, wr=True)
+        s.ram[0] = 0x55
+        out = run(s, [Datagram(CMD["LRW"], 1, 0x100, b"\xa0\xa1")])[0]
+        self.assertEqual(out.data, b"\x55\xa0")     # byte 1 reads byte 0's write
+        self.assertEqual(s.ram[0], 0xA1)            # the last write wins
+        self.assertEqual(out.wkc, 3)
+
     def test_fmmu_window_beyond_ram_fails(self):
         s = SlaveModel(ram_bytes=8)
         set_fmmu(s, 0, logical=0x100, length=4, physical=0x1000 + 6, rd=True)

@@ -223,7 +223,7 @@ class SlaveModel:
                         write_hit = True
         else:
             hit_any = False
-            took_r, took_w = [False] * n, [False] * n   # lowest FMMU owns each byte
+            rd_at, wr_at = [None] * n, [None] * n       # lowest FMMU owns each byte
             for i in range(self.n_fmmu):
                 base = FMMU_BASE + FMMU_SIZE * i
                 start, length, _sb, _eb, phys, _pb, ftype, act = \
@@ -236,17 +236,20 @@ class SlaveModel:
                     continue
                 a, b = lo - dg.address, hi - dg.address
                 if reads and ftype & 1:
-                    chunk = self._read(span, hi - lo)
                     for k in range(a, b):
-                        if not took_r[k]:
-                            data[k], took_r[k] = chunk[k - a], True
+                        rd_at[k] = rd_at[k] or (span[0], span[1] + k - a)
                     read_hit = hit_any = True
                 if writes and ftype & 2:
-                    for k in range(a, min(b, limit)):
-                        if not took_w[k]:
-                            self._write((span[0], span[1] + k - a), dg.data[k:k + 1])
-                            took_w[k] = True
+                    for k in range(a, b):
+                        wr_at[k] = wr_at[k] or (span[0], span[1] + k - a)
                     write_hit = hit_any = True
+            # Byte by byte in stream order, read then write, as rtl/dgram_exec.v does: a
+            # later byte mapped onto the same physical byte reads the earlier byte's write.
+            for k in range(n):
+                if rd_at[k]:
+                    data[k] = self._read(rd_at[k], 1)[0]
+                if wr_at[k] and k < limit:
+                    self._write(wr_at[k], dg.data[k:k + 1])
             if hit_any:
                 c.datagrams_addressed += 1
                 addressed_here = True
