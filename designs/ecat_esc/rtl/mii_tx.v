@@ -1,8 +1,12 @@
 // MII transmitter: byte stream to 4-bit nibbles (low nibble first).
 //
 // A frame starts when `valid` and `first` are seen while idle. The block sends
-// 7 x 0x55 + SFD 0xD5, then the bytes, then the CRC-32 (low byte first), then a
-// 12-byte inter-frame gap. `err` raised with a frame's last byte inverts its FCS. `ready` is high in the cycle a byte may be taken
+// 7 x 0x55 + SFD 0xD5, then the bytes, then the CRC-32 (low byte first), then an
+// inter-frame gap: 12 bytes, or as few as 8 when the next frame's first byte is already
+// waiting. A frame waits only when this transmit clock is slower than the receive clock
+// that fed it, so the shorter gap is what lets a transmitter up to 100 ppm slow keep up
+// with minimum-gap 1518-byte frames (LAN9253 DS 11.16.17 note 6) instead of backing up
+// the transmit FIFO. `err` raised with a frame's last byte inverts its FCS. `ready` is high in the cycle a byte may be taken
 // (valid && ready); the sender must hold `valid` until then. If a byte is not
 // there when needed the frame is finished with an inverted FCS and `underrun`
 // stays high until the next frame starts.
@@ -33,8 +37,9 @@ module mii_tx (
     wire        crc_residue;
     wire        crc_residue_next;
     wire        pre_last = (state == PRE) && (cnt == 5'd15);
-    // a frame starts from idle, or straight from the end of the gap if one is waiting
-    wire        start    = valid && first && ((state == IDLE) || ((state == IFG) && (cnt == 5'd23)));
+    // a frame starts from idle, or from the gap once its shortest part (16 nibbles) has passed
+    localparam [4:0] GAP_MIN = 5'd15;
+    wire        start    = valid && first && ((state == IDLE) || ((state == IFG) && (cnt >= GAP_MIN)));
 
     assign ready = pre_last || ((state == DATA) && phase && !last_flag);
 
@@ -124,7 +129,7 @@ module mii_tx (
                         cnt <= cnt + 5'd1;
                     end
                 end
-                default: begin   // IFG: 24 nibble times with tx_en low
+                default: begin   // IFG: 24 nibble times with tx_en low, 16 if a frame is waiting
                     if (start) begin
                         state    <= PRE;
                         cnt      <= 5'd0;

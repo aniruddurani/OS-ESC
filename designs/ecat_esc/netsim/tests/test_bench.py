@@ -74,6 +74,23 @@ class BenchTest(unittest.TestCase):
             self.assertEqual(r["data"], model.process(f), f"frame {i}")
         self.assertEqual(status["sticky"], 0)        # flags clear at nominal clocks
 
+    def test_back_to_back_at_ppm_limits(self):
+        # LAN9253 datasheet 11.16.17 note 6: an ESC forwards 1518-byte frames with +-100 ppm
+        # clocks. RX 100 ppm fast and TX 100 ppm slow (and the reverse), minimum gap.
+        for rx_ppm, tx_ppm in ((-100.0, 100.0), (100.0, -100.0)):
+            with self.subTest(rx_ppm=rx_ppm, tx_ppm=tx_ppm):
+                link = Link(BIN, dict(DEFAULT_CONFIG, rx_ppm=rx_ppm, tx_ppm=tx_ppm))
+                try:
+                    model = SlaveModel(ram_bytes=RAM)
+                    frames = [max_frame(i) for i in range(80)]
+                    for f in frames:
+                        link.send(f, ifg=24)
+                    _, replies, _, status = link.run(80, 10**10)
+                    self.assertEqual((status["seen"], status["sticky"]), (0, 0))
+                    self.assertEqual([r["data"] for r in replies], [model.process(f) for f in frames])
+                finally:
+                    link.close()
+
     def test_run_ends_with_one_status(self):
         sent, replies, events, status = self.link.run(0, 1_000_000)
         self.assertEqual((sent, replies, events), ([], [], []))
