@@ -81,6 +81,28 @@ dconfigs:
 	@for c in min default max; do $(MAKE) --no-print-directory dpnr LLCFG=$$c || true; done
 	$(PY) dconfigs --design $(DDESIGN) --clock-period $(CORE_PERIOD) 	  --metrics min=$(LLRUNS)/pnr_min/final/metrics.json 	  --metrics default=$(LLRUNS)/pnr_default/final/metrics.json 	  --metrics max=$(LLRUNS)/pnr_max/final/metrics.json 	  --out $(DREPORTS)/configs.json
 
+# --- netsim: esc_top in a simulated EtherCAT network (designs/<DDESIGN>/netsim) ------
+# A Verilator bench (tb_netsim.cpp) runs the RTL with real clock ratios and exchanges
+# whole frames with a Python network over a pipe.
+DNET          := designs/$(DDESIGN)/netsim
+NETSIM_PARAMS ?= -GN_FMMU=3 -GN_SM=4 -GRAM_BYTES=256 -GDIAG_EN=1
+NETSIM_OBJ    := $(DBUILD)/netsim/obj
+NETSIM_BIN    := $(NETSIM_OBJ)/Vesc_top
+DNET_BENCH    := $(DNET)/tb_netsim.cpp $(DNET)/proto.h $(DNET)/probes.vlt
+
+.PHONY: dnettest
+$(NETSIM_BIN): $(DRTL) $(DNET_BENCH) Makefile digital.mk
+	@mkdir -p $(NETSIM_OBJ) $(DLOGS)
+	@verilator --cc --exe --build -O3 -j 0 --top-module esc_top $(NETSIM_PARAMS) \
+	  -Wno-fatal -Wno-lint -Wno-style -CFLAGS "-O2 -std=c++17" \
+	  $(DRTL) $(sort $(wildcard $(DTB)/models/*.v)) $(DNET)/probes.vlt $(abspath $(DNET)/tb_netsim.cpp) \
+	  -Mdir $(NETSIM_OBJ) -o Vesc_top > $(DLOGS)/netsim_build.log 2>&1 \
+	  || { tail -n 30 $(DLOGS)/netsim_build.log; exit 1; }
+
+# Tests of the bench and link themselves (not a gate).
+dnettest: $(NETSIM_BIN)
+	NETSIM_BIN=$(NETSIM_BIN) python3 -m unittest discover -s $(DNET)/tests -v
+
 # Proves the digital gates catch real faults (see scripts/selftest_digital.sh).
 dselftest:
 	bash scripts/selftest_digital.sh
