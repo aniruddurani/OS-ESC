@@ -262,6 +262,44 @@ class BnetTest(unittest.TestCase):
         self.assertEqual(status, "error")
 
 
+SOEM_OK = {"checks": {"brd_count": True, "station_address": True, "fmmu_config": True,
+                      "sm_config": True, "lrw_cycles": True},
+           "pass": True, "cycle_us": {"min": 300.0, "median": 450.0, "max": 900.0}, "cycles": 10000}
+
+
+class BsoemTest(unittest.TestCase):
+    def test_bsoem_all_checks_pass(self):
+        from flowlib.board import evaluate_bsoem
+        status, metrics, errors = evaluate_bsoem(SOEM_OK)
+        self.assertEqual(status, "pass", errors)
+        self.assertEqual(metrics["cycles"], 10000)
+        self.assertEqual(metrics["cycle_us_median"], 450.0)
+
+    def test_bsoem_one_check_false_is_fail(self):
+        from flowlib.board import evaluate_bsoem
+        res = dict(SOEM_OK, checks=dict(SOEM_OK["checks"], fmmu_config=False), **{"pass": False})
+        status, _, errors = evaluate_bsoem(res)
+        self.assertEqual(status, "fail")
+        self.assertIn("fmmu_config", errors[0]["message"])
+
+    def test_bsoem_no_json_is_error(self):
+        from flowlib.board import evaluate_bsoem
+        status, _, _ = evaluate_bsoem(None)
+        self.assertEqual(status, "error")
+
+    def test_bsoem_missing_check_is_error(self):
+        from flowlib.board import evaluate_bsoem
+        checks = dict(SOEM_OK["checks"])
+        del checks["lrw_cycles"]
+        status, _, _ = evaluate_bsoem(dict(SOEM_OK, checks=checks))
+        self.assertEqual(status, "error")
+
+    def test_bsoem_too_few_cycles_is_error(self):
+        from flowlib.board import evaluate_bsoem
+        status, _, _ = evaluate_bsoem(dict(SOEM_OK, cycles=10))
+        self.assertEqual(status, "error")
+
+
 class StatusDecodeTest(unittest.TestCase):
     def test_decode_probe_value(self):
         import os

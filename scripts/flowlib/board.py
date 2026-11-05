@@ -187,3 +187,25 @@ def evaluate_bnet(results, manifest, size):
     else:
         status = "fail" if base == "fail" or failures else "pass"
     return status, metrics, found + errors + failures
+
+
+SOEM_CHECKS = ("brd_count", "station_address", "fmmu_config", "sm_config", "lrw_cycles")
+SOEM_MIN_CYCLES = 10000
+
+
+def evaluate_bsoem(result):
+    """Verdict on the SOEM low-level test's JSON (None if it printed none): all five checks
+    present and true, over at least SOEM_MIN_CYCLES LRW cycles."""
+    if result is None:
+        return "error", {}, [{"message": "the SOEM test printed no result"}]
+    checks = result.get("checks") or {}
+    cyc = result.get("cycle_us") or {}
+    metrics = dict(cycles=result.get("cycles"), cycle_us_min=cyc.get("min"),
+                   cycle_us_median=cyc.get("median"), cycle_us_max=cyc.get("max"), checks=checks)
+    errors = [{"message": f"SOEM test did not report {name}"} for name in SOEM_CHECKS if name not in checks]
+    if (result.get("cycles") or 0) < SOEM_MIN_CYCLES:
+        errors.append({"message": f"{result.get('cycles')} LRW cycles, needs {SOEM_MIN_CYCLES}"})
+    failures = [{"message": f"SOEM check {name} failed"} for name in SOEM_CHECKS
+                if name in checks and checks[name] is not True]
+    status = "error" if errors else ("fail" if failures else "pass")
+    return status, metrics, errors + failures

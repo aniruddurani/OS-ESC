@@ -236,6 +236,19 @@ def cmd_bnet(a):
     return write_report(a.out, stage, a.design, status, metrics, errors, a.results)
 
 
+def cmd_bsoem(a):
+    """bsoem: the SOEM low-level test's JSON result against the board."""
+    from flowlib.board import evaluate_bsoem
+    text = _read(a.result) or ""
+    line = next((s for s in text.splitlines() if s.startswith("{")), None)
+    try:
+        result = json.loads(line) if line else None
+    except ValueError:
+        result = None
+    status, metrics, errors = evaluate_bsoem(result)
+    return write_report(a.out, "bsoem", a.design, status, metrics, errors, a.result)
+
+
 def cmd_dnet(a):
     """dnet: the network simulation's results.json against its manifest. The fault-evidence
     rule is the netsim's own (check.py beside the manifest), so the gate and the runner
@@ -495,6 +508,12 @@ def build_parser():
     s.add_argument("--design", required=True)
     s.add_argument("--out", required=True)
     s.set_defaults(func=cmd_bnet)
+
+    s = sub.add_parser("bsoem")
+    s.add_argument("--result", required=True, help="the SOEM test's stdout")
+    s.add_argument("--design", required=True)
+    s.add_argument("--out", required=True)
+    s.set_defaults(func=cmd_bsoem)
 
     s = sub.add_parser("dconfigs")
     s.add_argument("--metrics", action="append", required=True, help="NAME=path to final metrics.json")

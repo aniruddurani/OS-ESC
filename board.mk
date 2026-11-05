@@ -74,3 +74,23 @@ $(DSTAMPS)/$(BNET_TAG).pass: $(DSTAMPS)/bprog.pass $(wildcard designs/$(DDESIGN)
 	$(PY) bnet --results $(BNET_OUT)/results.json --manifest $(BMANIFEST) --size $(BNET) \
 	  --design $(DDESIGN) --out $(DREPORTS)/$(BNET_TAG).json
 	@touch $@
+
+# SOEM's low-level calls against the board (BRD, addressing, FMMU, SyncManagers, cyclic
+# LRW). SOEM is fetched by CMake at a pinned tag; the Npcap SDK is at NPCAP_SDK.
+NPCAP_SDK ?= C:/npcap-sdk
+SOEM_DIR  := $(DBUILD)/board/soem
+SOEM_EXE  := $(SOEM_DIR)/soem_test.exe
+BOARD_NPF ?= $(shell powershell -NoProfile -Command "'\Device\NPF_' + (Get-NetAdapter -Name '$(BOARD_NIC)').InterfaceGuid")
+.PHONY: bsoem
+bsoem: $(DSTAMPS)/bsoem.pass
+$(SOEM_EXE): $(BOARD)/../soem_test/soem_test.c $(BOARD)/../soem_test/CMakeLists.txt
+	cmake -G "MinGW Makefiles" -S designs/$(DDESIGN)/board/soem_test -B $(SOEM_DIR) \
+	  -DNPCAP_SDK=$(NPCAP_SDK) > $(DLOGS)/soem_build.log 2>&1
+	mingw32-make -C $(SOEM_DIR) >> $(DLOGS)/soem_build.log 2>&1
+$(DSTAMPS)/bsoem.pass: $(DSTAMPS)/bprog.pass $(SOEM_EXE)
+	@mkdir -p $(DREPORTS) $(DLOGS) $(DSTAMPS)
+	@rm -f $@ $(DREPORTS)/bsoem.json $(DLOGS)/bsoem.out
+	-$(BSTATUS) reset --stp "$(STP)" > $(DLOGS)/bsoem_reset.json
+	-"$(SOEM_EXE)" '$(BOARD_NPF)' > $(DLOGS)/bsoem.out 2> $(DLOGS)/bsoem.err
+	$(PY) bsoem --result $(DLOGS)/bsoem.out --design $(DDESIGN) --out $(DREPORTS)/bsoem.json
+	@touch $@
