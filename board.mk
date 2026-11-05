@@ -94,3 +94,10 @@ $(DSTAMPS)/bsoem.pass: $(DSTAMPS)/bprog.pass $(SOEM_EXE)
 	-"$(SOEM_EXE)" '$(BOARD_NPF)' > $(DLOGS)/bsoem.out 2> $(DLOGS)/bsoem.err
 	$(PY) bsoem --result $(DLOGS)/bsoem.out --design $(DDESIGN) --out $(DREPORTS)/bsoem.json
 	@touch $@
+
+# Proves the board gates catch real faults (scripts/selftest_board.sh). STEP=nolink, with
+# the board's cable unplugged, checks that bnet without a link is an error.
+STEP ?= main
+.PHONY: bselftest
+bselftest:
+	bash scripts/selftest_board.sh $(STEP)
