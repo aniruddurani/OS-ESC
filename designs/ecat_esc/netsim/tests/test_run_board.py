@@ -14,6 +14,7 @@ import run_board  # noqa: E402
 import run_netsim  # noqa: E402
 from check import diag_reply  # noqa: E402
 from ecat import SlaveModel  # noqa: E402
+from pcap import read_pcap  # noqa: E402
 
 MANIFEST = os.path.join(HERE, "..", "..", "board", "de2_115", "manifest.txt")
 LINK_UP = {"build_id": 1, "state": "link_100fd",
@@ -31,14 +32,14 @@ class PerfectBoard:
     def run(self, replies, timeout_ps):
         sent, got = [], []
         for f in self.queue:
-            self.t += 1000
+            self.t += 1_000_000
             sent.append(dict(index=len(self.log["sent"]), t_start_ps=self.t, t_end_ps=self.t))
             self.log["sent"].append(f)
             before, trace_len = copy.deepcopy(self.dut.counters), len(self.dut.trace)
             r = self.dut.process(f)
             if r is not None and int.from_bytes(f[20:22], "little") == 0x0E00:
                 r = diag_reply(r, before, trace_len)[0]     # the RTL's diag block, as check.py predicts it
-            self.t += 1000
+            self.t += 1_000_000
             if r is not None:
                 got.append(dict(t_start_ps=self.t, t_end_ps=self.t, data=r))
         self.queue = []
@@ -110,6 +111,20 @@ class RunBoardTest(unittest.TestCase):
         board = FakeBoard()
         res = run(board, only="startup_k3_s1", frames=30)
         self.assertEqual(res["runs"][0]["frames"], 31)       # and the master's final diag read
+
+
+class RunPcapTest(unittest.TestCase):
+    def test_run_pcap_alternates_request_and_reply_in_time_order(self):
+        board = FakeBoard()
+        with tempfile.TemporaryDirectory() as out:
+            run_board.run_board(run_board.read_manifest(MANIFEST), "quick", out, mac="x", stp="stp",
+                                board=board, make_link=board.make_link, frames=100,
+                                only="cyclic_k3_s1")
+            packets = read_pcap(os.path.join(out, "cyclic_k3_s1.pcap"))
+        times = [t for t, _ in packets]
+        self.assertEqual(times, sorted(times))
+        self.assertGreater(times[0], 0)
+        self.assertEqual([f for _, f in packets][0::2], board.log["sent"])
 
 
 class RunOneLinkTest(unittest.TestCase):

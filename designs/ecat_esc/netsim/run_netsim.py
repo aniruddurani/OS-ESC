@@ -117,6 +117,7 @@ def run_one(spec, binary, out_dir, write_pcaps, event_level=0, make_link=None):
                wall_s=0.0, cycles=0, error="")
     link = None
     packets = []
+    sent_at = {}                            # frame index -> its place in packets, until SENT
     recent = collections.OrderedDict()      # frame index -> [sent time, input, [replies]]
     window = None
     try:
@@ -133,6 +134,9 @@ def run_one(spec, binary, out_dir, write_pcaps, event_level=0, make_link=None):
                 checker.on_sent(s)
                 if s["index"] in recent:
                     recent[s["index"]][0] = s["t_start_ps"] / 1e12
+                at = sent_at.pop(s["index"], None)
+                if at is not None:
+                    packets[at] = (s["t_start_ps"] / 1e12, packets[at][1])
             for r in replies:
                 if sabotage[0] == "drop-reply":
                     sabotage[0] = None
@@ -175,6 +179,7 @@ def run_one(spec, binary, out_dir, write_pcaps, event_level=0, make_link=None):
                 while len(recent) > 2 * BATCH + RING:
                     recent.popitem(last=False)
                 if write_pcaps:
+                    sent_at[sent_n] = len(packets)
                     packets.append((ts, dut_input))
                 sent_n += 1
                 want += expected is not None
@@ -203,7 +208,7 @@ def run_one(spec, binary, out_dir, write_pcaps, event_level=0, make_link=None):
     res["wall_s"] = time.time() - start
     name = run_name(spec)
     if write_pcaps and packets:
-        write_pcap(os.path.join(out_dir, name + ".pcap"), packets)
+        write_pcap(os.path.join(out_dir, name + ".pcap"), sorted(packets, key=lambda p: p[0]))
     if res["failures"] or res["error"]:
         if window is None:          # an error, or a failure found only when the run closed
             first = res["failures"][0]["index"] if res["failures"] else None

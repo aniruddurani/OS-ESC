@@ -101,3 +101,4 @@ test_mdc_is_clk_over_2_clk_div
 test_one_tx_clk_underrun_pulse_is_kept
 test_flags_clear_on_rst
 test_each_flag_maps_to_its_bit
+test_replay_real_captures
