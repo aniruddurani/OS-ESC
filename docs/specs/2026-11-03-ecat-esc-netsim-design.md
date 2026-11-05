@@ -29,7 +29,7 @@ a Terasic DE2-115 board (section 9).
    `./flow dall` after `dsim`. `./flow dnet NETSIM=soak` runs at least 1,000,000 frames.
 4. A live GUI shows the network and the inside of the ESC as a block diagram with frames
    moving through it, driven by the RTL's own signals (section 5).
-5. `./flow dselftest` proves `dnet` fails on six injected faults (section 7.1).
+5. `./flow dselftest` proves `dnet` fails on seven injected faults (section 7.1).
 6. Every model rule marked "verify" is checked against the LAN9253 datasheet, with each
    disagreement reported to the user, not silently changed (section 8).
 7. No change to `rtl/`, to the existing gates, or to `spec.json`. The existing 92 cocotb
@@ -223,7 +223,8 @@ Each mutant is a copy under `build/`; `rtl/` is not touched. Each must make `dne
 | Mutant | Caught by |
 |---|---|
 | WKC off by one on LRW only | mismatches in `cyclic` |
-| RAM one clock slower (the final-review mutant) | mismatches or `late` at line rate |
+| RAM one clock slower (the final-review mutant) | mismatches or `late` at line rate, with the core at 76 MHz (`--core-mhz`); at 100 MHz a byte is 8 clocks and the extra clock is harmless |
+| Transmitter always waits the full 12-byte gap | overflow or underrun at +-100 ppm |
 | TX FIFO too shallow | underrun in `clocks` |
 | Bad FCS not counted by `diag` | fault evidence (criterion 4) |
 | Checker: one expected byte flipped | mismatch, proves the comparison compares |
@@ -260,8 +261,12 @@ Board-level work, all outside the core: pin assignments, a PLL from the 50 MHz o
 to the core clock, reset, the PHY reset pin, and a small MDIO block that restricts the
 88E1111's advertisement to 100 Mbit full duplex (by default it advertises 1000 Mbit,
 which MII cannot carry; forcing the host NIC to 100 full is the fallback). The core must
-run at 75 MHz or more (6 clocks per 80 ns byte); whether the -7 device closes that is
-unknown until Quartus runs.
+run faster than 75 MHz. At exactly 75 MHz a byte is 6 clocks only on average: with the RX
+clock faster than nominal some bytes arrive 5 clocks apart, and the netsim (`--core-mhz 75`,
+2026-11-04) shows broadcast-read mismatches. The quick gate passes at 76 MHz; with the
+PHYs' +-100 ppm and the board oscillator's own tolerance, a PLL output such as 80 MHz
+(50 MHz x 8/5) leaves margin. Whether the -7 device closes that is unknown until Quartus
+runs.
 
 This replaces the earlier Cyclone 10 LP Evaluation Kit (EK-10CL025U256) target, which
 needed an RGMII-to-MII adapter and would have been about 40% full.

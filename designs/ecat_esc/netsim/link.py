@@ -7,7 +7,7 @@ import tempfile
 import proto
 
 DEFAULT_CONFIG = dict(seed=1, rx_ppm=0.0, tx_ppm=0.0, drift_ppm_per_s=0.0, rx_phase_ns=0.0,
-                      tx_phase_ns=0.0, core_phase_ns=0.0, event_level=0)
+                      tx_phase_ns=0.0, core_phase_ns=0.0, core_mhz=100.0, event_level=0)
 
 
 class LinkError(Exception):

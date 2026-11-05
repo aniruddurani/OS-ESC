@@ -31,6 +31,7 @@ enum Fault : uint32_t { F_RUNT = 1, F_OVERSIZE = 2, F_NON_ETHERCAT = 4, F_MALFOR
 struct Config {
     uint64_t seed;
     double rx_ppm, tx_ppm, drift_ppm_per_s, rx_phase_ns, tx_phase_ns, core_phase_ns;
+    double core_mhz;       // core clock, 1 to 1000 MHz
     uint8_t event_level;   // 0 none, 1 sampled, 2 all
 };
 

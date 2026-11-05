@@ -109,7 +109,8 @@ def failure_window(recent, index):
 
 def run_one(spec, binary, out_dir, write_pcaps, event_level=0):
     start = time.time()
-    config = dict(clock_config(spec["scenario"], spec["seed"]), event_level=event_level)
+    config = dict(clock_config(spec["scenario"], spec["seed"], spec.get("core_mhz", 100.0)),
+                  event_level=event_level)
     res = dict(spec, config=config, metrics={}, injected={}, diag={}, failures=[], sim_ps=0,
                wall_s=0.0, cycles=0, error="")
     link = None
@@ -236,6 +237,8 @@ def main(argv=None):
                         "first mismatch (slower)")
     p.add_argument("--sabotage", choices=["checker", "drop-reply"],
                    help="self-test only: flip one expected byte, or drop one reply, in the first run")
+    p.add_argument("--core-mhz", type=float, default=100.0,
+                   help="core clock of every run (75 MHz, 6 clocks per byte, is the board's floor)")
     p.add_argument("--gui", action="store_true", help="watch mode: one scenario, paced, live view")
     p.add_argument("--view", help="replay a watch run's events.jsonl in the live view")
     p.add_argument("--scenario", default="cyclic")
@@ -254,6 +257,8 @@ def main(argv=None):
     runs = plan_runs(read_manifest(a.manifest), a.size, a.seed)
     if a.only:
         runs = [r for r in runs if run_name(r) == a.only]
+    for r in runs:
+        r["core_mhz"] = a.core_mhz
     if a.sabotage and runs:
         runs[0]["sabotage"] = a.sabotage
     start = time.time()

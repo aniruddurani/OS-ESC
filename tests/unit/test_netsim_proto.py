@@ -12,7 +12,7 @@ import proto  # noqa: E402
 
 SAMPLES = {
     "CONFIG": dict(seed=7, rx_ppm=-12.5, tx_ppm=99.0, drift_ppm_per_s=3.0, rx_phase_ns=1.5,
-                   tx_phase_ns=20.0, core_phase_ns=4.0, event_level=2),
+                   tx_phase_ns=20.0, core_phase_ns=4.0, core_mhz=75.0, event_level=2),
     "SEND": dict(ifg_nibbles=24, er_nibble=-1, flags=1, data=b"\x01\x02\x03"),
     "RUN": dict(replies=5, timeout_ps=10**12),
     "REPLY": dict(t_start_ps=123, t_end_ps=456789, data=bytes(range(64))),

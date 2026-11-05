@@ -8,8 +8,8 @@ import struct
 
 # name -> (type value, fixed payload layout, field names, ends with frame bytes)
 _LAYOUT = {
-    "CONFIG": (1, "<QddddddB", ("seed", "rx_ppm", "tx_ppm", "drift_ppm_per_s", "rx_phase_ns",
-                                "tx_phase_ns", "core_phase_ns", "event_level"), False),
+    "CONFIG": (1, "<QdddddddB", ("seed", "rx_ppm", "tx_ppm", "drift_ppm_per_s", "rx_phase_ns",
+                                 "tx_phase_ns", "core_phase_ns", "core_mhz", "event_level"), False),
     "SEND":   (2, "<HiB", ("ifg_nibbles", "er_nibble", "flags"), True),
     "RUN":    (3, "<IQ", ("replies", "timeout_ps"), False),
     "REPLY":  (4, "<QQ", ("t_start_ps", "t_end_ps"), True),
