@@ -43,6 +43,7 @@ TESTS = {
     "test_diag_pair": "core_pair",
     "test_top": "esc_top",
     "test_replay": "esc_top",
+    "test_phy_init": "phy_init",
 }
 
 
@@ -63,15 +64,24 @@ PARAMS = {
     "test_diag_sat": {"RAM_BYTES": 256, "CNT_W": 3},
     "test_top": {"RAM_BYTES": 256},
     "test_replay": {"RAM_BYTES": 256},
+    "test_phy_init": {"CLK_DIV": 4, "RST_CYCLES": 50, "WAIT_CYCLES": 50, "POLL_CYCLES": 200},
 }
 
 
 PDK_MACRO_VARIANT = {"test_sram_pdk"}
 
+# Board-level blocks (designs/ecat_esc/board/de2_115/rtl) these tests need; esc_board.v
+# itself is left out because it instantiates Altera blocks.
+BOARD_TESTS = {"test_phy_init"}
+BOARD_RTL = os.path.join(TB_DIR, "..", "board", "de2_115", "rtl")
+
 
 def run_one(module, top, rtl_dir, build):
     # RTL plus testbench-only wrappers (tb/*.v); lint covers rtl/ only.
     sources = sorted(glob.glob(os.path.join(rtl_dir, "*.v")) + glob.glob(os.path.join(TB_DIR, "*.v")))
+    if module in BOARD_TESTS:
+        sources += sorted(f for f in glob.glob(os.path.join(BOARD_RTL, "*.v"))
+                          if os.path.basename(f) != "esc_board.v")
     if module in PDK_MACRO_VARIANT:      # the PDK's own macro model instead of the behavioural one
         sources += [os.path.join(os.environ["PDK_ROOT"], "sky130A/libs.ref/sky130_sram_macros/verilog",
                                  "sky130_sram_1kbyte_1rw1r_8x1024_8.v")]
