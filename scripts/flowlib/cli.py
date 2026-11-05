@@ -170,6 +170,72 @@ def cmd_dsim(a):
     return write_report(a.out, "dsim", a.design, status, r, errors, a.results)
 
 
+def _synth_parameters(yaml_text):
+    """NAME=value entries of a LibreLane config's SYNTH_PARAMETERS list."""
+    params, inside = {}, False
+    for line in yaml_text.splitlines():
+        if re.match(r"^SYNTH_PARAMETERS\s*:", line):
+            inside = True
+        elif inside and re.match(r"^\s*-\s*\w+\s*=", line):
+            name, value = line.split("-", 1)[1].split("=", 1)
+            params[name.strip()] = int(value.strip())
+        elif inside and line.strip() and not line.startswith((" ", "\t")):
+            inside = False
+    return params
+
+
+def cmd_bbuild(a):
+    """bbuild: a Quartus build of the FPGA board top, from Quartus's own reports."""
+    from flowlib.board import evaluate_bbuild
+    texts = {p: _read(p) for p in (a.sta_rpt, a.map_rpt, a.fit_rpt, a.params_from)}
+    gone = [p for p, t in texts.items() if t is None]
+    if gone:
+        return write_report(a.out, "bbuild", a.design, "error", {},
+                            [{"message": f"build evidence missing: {p}"} for p in gone], a.fit_rpt)
+    params = _synth_parameters(texts[a.params_from])
+    if not params:
+        return write_report(a.out, "bbuild", a.design, "error", {},
+                            [{"message": f"no SYNTH_PARAMETERS in {a.params_from}"}], a.fit_rpt)
+    status, metrics, errors = evaluate_bbuild(texts[a.sta_rpt], texts[a.map_rpt], texts[a.fit_rpt],
+                                              params, a.core_mhz)
+    return write_report(a.out, "bbuild", a.design, status, metrics, errors, a.sta_rpt)
+
+
+def cmd_bprog(a):
+    """bprog: esc_board.sof loaded over JTAG, and the board's status read back."""
+    from flowlib.board import evaluate_bprog
+    log = _read(a.pgm_log)
+    if log is None:
+        return write_report(a.out, "bprog", a.design, "error", {},
+                            [{"message": f"programmer log missing: {a.pgm_log}"}], a.pgm_log)
+    text = _read(a.status_json)
+    try:
+        status = json.loads(text) if text else None
+    except ValueError:
+        status = None
+    s, metrics, errors = evaluate_bprog(log, status)
+    return write_report(a.out, "bprog", a.design, s, metrics, errors, a.pgm_log)
+
+
+def cmd_bnet(a):
+    """bnet: the netsim scenarios run against the board (run_board.py's results.json)."""
+    from flowlib.board import evaluate_bnet
+    from flowlib.netsim import read_manifest
+    stage = "bnet" if a.size == "quick" else f"bnet_{a.size}"
+    text, manifest_text = _read(a.results), _read(a.manifest)
+    if text is None or manifest_text is None:
+        gone = a.results if text is None else a.manifest
+        return write_report(a.out, stage, a.design, "error", {},
+                            [{"message": f"board run evidence missing: {gone}"}], a.results)
+    try:
+        results = json.loads(text)
+    except ValueError as e:
+        return write_report(a.out, stage, a.design, "error", {},
+                            [{"message": f"results unreadable: {e}"}], a.results)
+    status, metrics, errors = evaluate_bnet(results, read_manifest(manifest_text), a.size)
+    return write_report(a.out, stage, a.design, status, metrics, errors, a.results)
+
+
 def cmd_dnet(a):
     """dnet: the network simulation's results.json against its manifest. The fault-evidence
     rule is the netsim's own (check.py beside the manifest), so the gate and the runner
@@ -404,6 +470,31 @@ def build_parser():
     s.add_argument("--design", required=True)
     s.add_argument("--out", required=True)
     s.set_defaults(func=cmd_dnet)
+
+    s = sub.add_parser("bbuild")
+    s.add_argument("--sta-rpt", required=True)
+    s.add_argument("--map-rpt", required=True)
+    s.add_argument("--fit-rpt", required=True)
+    s.add_argument("--params-from", required=True, help="LibreLane config whose SYNTH_PARAMETERS the build must match")
+    s.add_argument("--core-mhz", type=float, required=True)
+    s.add_argument("--design", required=True)
+    s.add_argument("--out", required=True)
+    s.set_defaults(func=cmd_bbuild)
+
+    s = sub.add_parser("bprog")
+    s.add_argument("--pgm-log", required=True)
+    s.add_argument("--status-json", required=True)
+    s.add_argument("--design", required=True)
+    s.add_argument("--out", required=True)
+    s.set_defaults(func=cmd_bprog)
+
+    s = sub.add_parser("bnet")
+    s.add_argument("--results", required=True)
+    s.add_argument("--manifest", required=True)
+    s.add_argument("--size", choices=["quick", "soak"], required=True)
+    s.add_argument("--design", required=True)
+    s.add_argument("--out", required=True)
+    s.set_defaults(func=cmd_bnet)
 
     s = sub.add_parser("dconfigs")
     s.add_argument("--metrics", action="append", required=True, help="NAME=path to final metrics.json")

@@ -1,0 +1,9 @@
+# Scenarios the bnet gate requires on the board: minimum frames in the quick run and in the soak.
+# clocks and faults are not here: the real crystals replace simulated ppm and drift, and a
+# NIC cannot send rx_er, a bad FCS or runts. `total` bounds the sum.
+# scenario  quick  soak
+startup     1000   20000
+cyclic      1000   500000
+random      1000   400000
+chain       1000   80000
+total       20000  1000000

@@ -107,7 +107,9 @@ def failure_window(recent, index):
     return sorted(packets, key=lambda p: p[0])
 
 
-def run_one(spec, binary, out_dir, write_pcaps, event_level=0):
+def run_one(spec, binary, out_dir, write_pcaps, event_level=0, make_link=None):
+    """One run. `make_link(config)` builds the link; by default the pipe to the Verilator
+    bench at `binary` (run_board.py passes the NIC link to the real board)."""
     start = time.time()
     config = dict(clock_config(spec["scenario"], spec["seed"], spec.get("core_mhz", 100.0)),
                   event_level=event_level)
@@ -118,7 +120,7 @@ def run_one(spec, binary, out_dir, write_pcaps, event_level=0):
     recent = collections.OrderedDict()      # frame index -> [sent time, input, [replies]]
     window = None
     try:
-        link = Link(binary, config)
+        link = make_link(config) if make_link else Link(binary, config)
         chain = Chain(spec["k"])
         master = Master(spec["scenario"], spec["seed"], k=spec["k"], frames=spec["frames"])
         checker = Checker()

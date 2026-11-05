@@ -1,0 +1,102 @@
+"""Runs the netsim scenarios against the real board (the ESC on a DE2-115) over a NIC:
+the same master, model chain and checker as run_netsim.py, with wire_link in place of the
+Verilator pipe. Runs go one after another (one NIC). Before each run the ESC is
+soft-reset over JTAG (the board keeps RAM, registers and diag counters between runs) and
+its status read; after the run the status is read again and its FIFO flags join the run's
+flags.
+
+Usage (Windows host):
+  python run_board.py --mac MAC --manifest M --size quick|soak --out DIR [--stp QUARTUS_STP]
+                      [--only RUN] [--frames N] [--sabotage checker|drop-reply] [--seed S]
+
+DIR/results.json   run_netsim's layout, plus board_before / board_after per run and
+                   not_applicable: the scenarios a NIC cannot run
+"""
+import argparse
+import json
+import os
+import sys
+import time
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path[:0] = [HERE, os.path.join(HERE, "..", "model"), os.path.join(HERE, "..", "tb"),
+                os.path.join(HERE, "..", "board")]
+
+import board_status  # noqa: E402
+from run_netsim import plan_runs, read_manifest, run_name, run_one  # noqa: E402
+from scenarios import clock_config  # noqa: E402
+
+NOT_APPLICABLE = ["clocks", "faults"]
+FLAG_BITS = {"rx_overflow": 1, "tx_overflow": 2, "tx_underrun": 4}
+
+
+def _ready(status):
+    """Why the board is not ready for a run, or '' if it is."""
+    if status["state"] != "link_100fd":
+        return f"PHY state {status['state']}"
+    flags = [k for k, v in status["sticky"].items() if v]
+    return f"FIFO flags set after reset: {flags}" if flags else ""
+
+
+def run_board(manifest, size, out, mac, stp, only=None, frames=None, sabotage=None, seed=1,
+              board=board_status, make_link=None):
+    if make_link is None:
+        from wire_link import WireLink
+        make_link = lambda: WireLink(mac)       # noqa: E731
+    runs = plan_runs(manifest, size, seed)
+    if only:
+        runs = [r for r in runs if run_name(r) == only]
+    if frames:
+        for r in runs:
+            r["frames"] = frames
+    if sabotage and runs:
+        runs[0]["sabotage"] = sabotage
+    start, results = time.time(), []
+    for spec in runs:
+        res = None
+        try:
+            board.soft_reset(stp)
+            before = board.read_status(stp)
+            why = _ready(before)
+            if why:
+                res = dict(spec, config=clock_config(spec["scenario"], spec["seed"]), metrics={},
+                           injected={}, diag={}, failures=[], error=f"board not ready: {why}")
+            else:
+                res = run_one(spec, None, out, size == "quick", make_link=lambda c: make_link())
+                after = board.read_status(stp)
+                res["board_after"] = after
+                res["metrics"]["flags_seen"] = res["metrics"].get("flags_seen", 0) | sum(
+                    bit for name, bit in FLAG_BITS.items() if after["sticky"].get(name))
+            res["board_before"] = before
+        except board_status.BoardError as e:
+            res = res or dict(spec, metrics={}, injected={}, diag={}, failures=[])
+            res["error"] = f"board status: {e}"
+        results.append(res)
+    doc = dict(size=size, wall_s=time.time() - start, runs=results, not_applicable=NOT_APPLICABLE)
+    with open(os.path.join(out, "results.json"), "w") as f:
+        json.dump(doc, f, indent=1)
+    return doc
+
+
+def main(argv=None):
+    p = argparse.ArgumentParser()
+    p.add_argument("--mac", required=True, help="the NIC cabled to the board's ETHERNET 0")
+    p.add_argument("--manifest", required=True)
+    p.add_argument("--size", choices=["quick", "soak"], default="quick")
+    p.add_argument("--out", required=True)
+    p.add_argument("--stp", default=board_status.STP)
+    p.add_argument("--only", help="run only the named run (scenario_kK_sSEED)")
+    p.add_argument("--frames", type=int, help="frames per run, in place of the manifest's")
+    p.add_argument("--sabotage", choices=["checker", "drop-reply"],
+                   help="self-test only: flip one expected byte, or drop one reply, in the first run")
+    p.add_argument("--seed", type=int, default=1)
+    a = p.parse_args(argv)
+    os.makedirs(a.out, exist_ok=True)
+    doc = run_board(read_manifest(a.manifest), a.size, a.out, a.mac, a.stp, a.only, a.frames,
+                    a.sabotage, a.seed)
+    print(f"{len(doc['runs'])} runs in {doc['wall_s']:.1f}s")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

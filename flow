@@ -5,6 +5,7 @@
 #   ./flow down           stop and remove it
 #   ./flow shell          interactive login shell inside it
 #   ./flow <make args>    run make in the repo, e.g. ./flow sim DESIGN=inv
+#   ./flow b<stage> ...   FPGA board stages (bbuild, bprog, ...): board.mk on the host
 #
 # Exit code is make's exit code.
 set -euo pipefail
@@ -16,6 +17,13 @@ CONTAINER=sf-iic
 REPO_IN_CONTAINER=/foss/designs/silicon-flow
 
 cd "$(dirname "$0")"
+
+# FPGA board stages run on the Windows host (Quartus, Npcap, SOEM), not in the container.
+case "${1:-}" in
+  bbuild|bprog|bstatus|bnet|bsoem|bselftest)
+    exec mingw32-make --no-print-directory -f board.mk "$@"
+    ;;
+esac
 
 if ! docker info >/dev/null 2>&1; then
   echo "Docker is not running. Start Docker Desktop and retry." >&2
