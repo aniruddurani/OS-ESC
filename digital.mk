@@ -16,6 +16,9 @@ DTB      := designs/$(DDESIGN)/tb
 DTB_SRC  := $(wildcard $(DTB)/*.py) $(DTB)/manifest.txt $(DBOARD_RTL)
 DBOARD_RTL := $(sort $(wildcard designs/$(DDESIGN)/board/de2_115/rtl/*.v))   # FPGA board blocks
 DLINT_EXTRA ?= $(sort $(wildcard $(DTB)/lint/*.v))   # declarations of macros the RTL instantiates
+DBOARD_LINT := $(sort $(wildcard designs/$(DDESIGN)/board/de2_115/lint/*.v))   # Altera block declarations
+# The board blocks are linted only against the real rtl/ (dselftest's mutant copies lint rtl/ alone).
+DBOARD_LINTED := $(if $(filter designs/$(DDESIGN)/rtl,$(DRTL_DIR)),$(DBOARD_RTL))
 
 .PHONY: dlint dsim dsynth dpnr dall dconfigs dselftest
 dlint: $(DSTAMPS)/dlint.pass
@@ -24,12 +27,13 @@ dsim: $(DSTAMPS)/dsim.pass
 # Verilator lint with all warnings on; the stage passes only with none. Every
 # module is linted as its own top (a library of blocks has no single top, and
 # MULTITOP is not silenced); the log collects the output of all runs.
-$(DSTAMPS)/dlint.pass: $(DRTL) Makefile digital.mk
+$(DSTAMPS)/dlint.pass: $(DRTL) $(DBOARD_LINTED) $(DBOARD_LINT) Makefile digital.mk
 	@mkdir -p $(DREPORTS) $(DLOGS) $(DSTAMPS)
 	@rm -f $@ $(DREPORTS)/dlint.json $(DLOGS)/dlint.log
 	@: > $(DLOGS)/dlint.log
 	-@if [ -z "$(DRTL)" ]; then verilator --lint-only -Wall >> $(DLOGS)/dlint.log 2>&1; fi
 	-@for f in $(DRTL); do m=$$(basename $$f .v); 	  verilator --lint-only -Wall --top-module $$m $(DRTL) $(DLINT_EXTRA) >> $(DLOGS)/dlint.log 2>&1; done
+	-@for f in $(DBOARD_LINTED); do m=$$(basename $$f .v); 	  verilator --lint-only -Wall --top-module $$m $(DRTL) $(DLINT_EXTRA) $(DBOARD_LINTED) $(DBOARD_LINT) >> $(DLOGS)/dlint.log 2>&1; done
 	$(PY) dlint --log $(DLOGS)/dlint.log --design $(DDESIGN) --out $(DREPORTS)/dlint.json
 	@touch $@
 

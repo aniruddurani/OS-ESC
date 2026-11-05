@@ -44,6 +44,7 @@ TESTS = {
     "test_top": "esc_top",
     "test_replay": "esc_top",
     "test_phy_init": "phy_init",
+    "test_board_flags": "board_flags",
 }
 
 
@@ -72,7 +73,7 @@ PDK_MACRO_VARIANT = {"test_sram_pdk"}
 
 # Board-level blocks (designs/ecat_esc/board/de2_115/rtl) these tests need; esc_board.v
 # itself is left out because it instantiates Altera blocks.
-BOARD_TESTS = {"test_phy_init"}
+BOARD_TESTS = {"test_phy_init", "test_board_flags"}
 BOARD_RTL = os.path.join(TB_DIR, "..", "board", "de2_115", "rtl")
 
 
