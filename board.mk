@@ -121,6 +121,15 @@ $(DSTAMPS)/bsoem.pass: $(DSTAMPS)/bprog.pass $(SOEM_EXE) $(SOEM_CONFIG_EXE)
 	  --design $(DDESIGN) --out $(DREPORTS)/bsoem.json
 	@touch $@
 
+# Records SOEM's real traffic for the replay test (a tool, not a gate). The capture is
+# refused unless its frames pair up as request and reply.
+CAPTURES := designs/$(DDESIGN)/captures
+.PHONY: bcapture
+bcapture: $(SOEM_CONFIG_EXE)
+	$(BSTATUS) reset --stp "$(STP)"
+	python designs/$(DDESIGN)/board/capture_soem.py --mac "$(BOARD_MAC)" \
+	  --out $(CAPTURES)/board_soem_start.pcap -- "$(abspath $(SOEM_CONFIG_EXE))" '$(BOARD_NPF)' 200
+
 # Proves the board gates catch real faults (scripts/selftest_board.sh). STEP=nolink, with
 # the board's cable unplugged, checks that bnet without a link is an error.
 STEP ?= main
