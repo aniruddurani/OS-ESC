@@ -43,6 +43,7 @@ TESTS = {
     "test_diag_pair": "core_pair",
     "test_top": "esc_top",
     "test_replay": "esc_top",
+    "test_al_sii": "esc_core",
     "test_phy_init": "phy_init",
     "test_board_flags": "board_flags",
 }
@@ -65,6 +66,7 @@ PARAMS = {
     "test_diag_sat": {"RAM_BYTES": 256, "CNT_W": 3},
     "test_top": {"RAM_BYTES": 256},
     "test_replay": {"RAM_BYTES": 256},
+    "test_al_sii": {"RAM_BYTES": 256},
     "test_phy_init": {"CLK_DIV": 4, "RST_CYCLES": 50, "WAIT_CYCLES": 50, "POLL_CYCLES": 200},
 }
 

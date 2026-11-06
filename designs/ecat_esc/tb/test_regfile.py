@@ -10,6 +10,11 @@ from ecat import SlaveModel
 N_FMMU, N_SM = 3, 4          # regfile defaults, equal to SlaveModel defaults
 
 
+def in_al_sii(addr):
+    """esc_core sends these to al_sii, not here (test_al_sii.py covers them)."""
+    return 0x0120 <= addr < 0x0150 or 0x0500 <= addr < 0x0600
+
+
 async def start(dut):
     cocotb.start_soon(Clock(dut.clk, 10, unit="ns").start())
     dut.rst.value = 1
@@ -17,7 +22,7 @@ async def start(dut):
     dut.mem_we.value = 0
     dut.mem_addr.value = 0
     dut.mem_wdata.value = 0
-    dut.dl_status.value = 0
+    dut.dl_status.value = 0x0211                  # what esc_core ties it to
     for _ in range(4):
         await RisingEdge(dut.clk)
     dut.rst.value = 0
@@ -59,7 +64,8 @@ async def test_reset_values_match_documentation(dut):
     await start(dut)
     ref = SlaveModel().regs
     for addr in range(0x1000):
-        assert await mem_read(dut, addr) == ref[addr], f"reset value at {addr:#06x}"
+        if not in_al_sii(addr):
+            assert await mem_read(dut, addr) == ref[addr], f"reset value at {addr:#06x}"
 
 
 @cocotb.test()
@@ -153,6 +159,8 @@ async def test_random_access_matches_model(dut):
     for n in range(1500):
         lo, hi = rng.choice(windows)
         addr = rng.randrange(lo, hi)
+        if in_al_sii(addr):
+            continue
         if rng.random() < 0.5:
             val = rng.randrange(256)
             await mem_write(dut, addr, val)

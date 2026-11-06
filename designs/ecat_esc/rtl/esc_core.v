@@ -80,18 +80,22 @@ module esc_core #(
     wire  [7:0] mem_wdata, mem_rdata;
     wire        hi = |mem_addr[15:12];
     wire        diag_sel = (DIAG_EN != 0) && (mem_addr[15:8] == 8'h0E);   // 0x0E00..0x0EFF
+    // AL registers 0x0120..0x014F, SII 0x0500..0x05FF
+    wire        al_sel   = (mem_addr[15:8] == 8'h05) ||
+                           (mem_addr[15:8] == 8'h01 && (mem_addr[7:4] == 4'h2 || mem_addr[7:4] == 4'h3 ||
+                                                        mem_addr[7:4] == 4'h4));
 
-    wire  [7:0] rf_rdata, pd_rdata;
-    wire        rf_rvalid, pd_rvalid;
+    wire  [7:0] rf_rdata, pd_rdata, al_rdata;
+    wire        rf_rvalid, pd_rvalid, al_rvalid;
     wire [15:0] station_addr;
     wire [8*16*((N_FMMU == 0) ? 1 : N_FMMU)-1:0] fmmu_cfg;
     wire [8*8*((N_SM == 0) ? 1 : N_SM)-1:0]      sm_cfg;
 
     regfile #(.N_FMMU(N_FMMU), .N_SM(N_SM), .RAM_BYTES(RAM_BYTES)) u_regfile (
         .clk(clk), .rst(rst_rf),
-        .mem_req(mem_req && !hi && !diag_sel), .mem_we(mem_we), .mem_addr(mem_addr), .mem_wdata(mem_wdata),
+        .mem_req(mem_req && !hi && !diag_sel && !al_sel), .mem_we(mem_we), .mem_addr(mem_addr), .mem_wdata(mem_wdata),
         .mem_rdata(rf_rdata), .mem_rvalid(rf_rvalid),
-        .dl_status(16'd0),
+        .dl_status(16'h0211),                   // EEPROM loaded, port 0 link, port 0 open
         .station_addr(station_addr), .fmmu_cfg(fmmu_cfg), .sm_cfg(sm_cfg)
     );
 
@@ -101,11 +105,17 @@ module esc_core #(
         .mem_rdata(pd_rdata), .mem_rvalid(pd_rvalid)
     );
 
+    al_sii u_al (
+        .clk(clk), .rst(rst_rf),
+        .mem_req(mem_req && al_sel), .mem_we(mem_we), .mem_addr(mem_addr), .mem_wdata(mem_wdata),
+        .mem_rdata(al_rdata), .mem_rvalid(al_rvalid)
+    );
+
     wire  [7:0] dg_rdata;
     wire        dg_rvalid;
 
-    assign mem_rvalid = rf_rvalid || pd_rvalid || dg_rvalid;
-    assign mem_rdata  = rf_rvalid ? rf_rdata : (pd_rvalid ? pd_rdata : dg_rdata);
+    assign mem_rvalid = rf_rvalid || pd_rvalid || al_rvalid || dg_rvalid;
+    assign mem_rdata  = rf_rvalid ? rf_rdata : (pd_rvalid ? pd_rdata : (al_rvalid ? al_rdata : dg_rdata));
 
     // --- datagram engine (logical addressing through the FMMUs inside it) -----------
     wire        x_valid, x_first, x_last, x_err;
