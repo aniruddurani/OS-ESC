@@ -247,18 +247,22 @@ def _soem_program(label, result, names):
     return metrics, errors, failures
 
 
-def evaluate_bsoem(result, config_result, before, after, build):
+def evaluate_bsoem(result, config_result, before, after, build, between):
     """Verdict on the two SOEM programs' JSON: the low-level test and SOEM's standard start-up.
-    `before` and `after` are the board's status around them (None if unreadable): a board that
-    was not there, not linked or not the build `build` is an error whatever the checks say,
-    and a FIFO flag or a lost link after them is a failure."""
+    `before` and `after` are the board's status around them, `between` the status from the soft
+    reset that puts soem_config on a fresh ESC (None if unreadable): a board that was not there,
+    not linked or not the build `build` is an error whatever the checks say, and a FIFO flag or
+    a lost link after them is a failure."""
     if before is None or after is None:
         return "error", {}, [{"message": "board status could not be read around the SOEM test"}]
-    other = _other_image(before, build)
-    if other:
-        return "error", {}, [{"message": other}]
-    if before["state"] != "link_100fd":
-        return "error", {}, [{"message": f"board not ready: PHY state {before['state']}"}]
+    if between is None:
+        return "error", {}, [{"message": "the soft reset between the SOEM programs failed"}]
+    for status in (before, between):
+        other = _other_image(status, build)
+        if other:
+            return "error", {}, [{"message": other}]
+        if status["state"] != "link_100fd":
+            return "error", {}, [{"message": f"board not ready: PHY state {status['state']}"}]
     metrics, errors, failures = _soem_program("the SOEM test", result, SOEM_CHECKS)
     config, config_errors, config_failures = _soem_program("soem_config", config_result, SOEM_CONFIG_CHECKS)
     metrics.update({f"config_{k}": v for k, v in config.items()})

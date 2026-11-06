@@ -12,8 +12,8 @@ here through `esc_top` and compares each response datagram by datagram. A real
 slave of a different make reports different identity registers, so differences
 that are expected (type, revision, build, counts, RAM size, DL status ...) go in
 `<capture>.allow.json` as a list of `[frame, datagram, field]`; anything else is a
-failure. While this folder has no `.pcap`, that test is skipped and the design
-is **not verified against real hardware**.
+failure. The test fails if a capture named in `REQUIRED_CAPTURES` (`tb/replay.py`) is
+missing, and `dsim`'s stamp depends on this folder, so `./flow dsim` replays a new recording.
 
 ## `board_cyclic_k3_s1.pcap`
 

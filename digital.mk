@@ -14,7 +14,8 @@ DRTL_DIR ?= designs/$(DDESIGN)/rtl
 DRTL     ?= $(sort $(wildcard $(DRTL_DIR)/*.v))
 DTB      := designs/$(DDESIGN)/tb
 DBOARD_RTL := $(sort $(wildcard designs/$(DDESIGN)/board/de2_115/rtl/*.v))   # FPGA board blocks
-DTB_SRC  := $(wildcard $(DTB)/*.py) $(DTB)/manifest.txt $(DBOARD_RTL)
+DCAPTURES := $(wildcard designs/$(DDESIGN)/captures/*.pcap designs/$(DDESIGN)/captures/*.allow.json)
+DTB_SRC  := $(wildcard $(DTB)/*.py) $(DTB)/manifest.txt $(DBOARD_RTL) $(DCAPTURES)
 DLINT_EXTRA ?= $(sort $(wildcard $(DTB)/lint/*.v))   # declarations of macros the RTL instantiates
 DBOARD_LINT := $(sort $(wildcard designs/$(DDESIGN)/board/de2_115/lint/*.v))   # Altera block declarations
 # The board blocks are linted only against the real rtl/ (dselftest's mutant copies lint rtl/ alone).

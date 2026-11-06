@@ -1,5 +1,6 @@
 import json
 import os
+import subprocess
 import tempfile
 import unittest
 
@@ -13,6 +14,17 @@ FIXTURES = os.path.join(os.path.dirname(__file__), "..", "fixtures", "digital")
 def fixture(name):
     with open(os.path.join(FIXTURES, name)) as f:
         return f.read()
+
+
+class DsimStampTest(unittest.TestCase):
+    def test_dsim_stamp_depends_on_the_captures(self):
+        # bcapture overwrites a capture in place: a stamp that ignored it would vouch for a
+        # recording that was never replayed.
+        target = "build/ecat_esc/stamps/dsim.pass"
+        out = subprocess.run(["make", "-pn", target], capture_output=True, text=True, check=True).stdout
+        rule = next(s for s in out.splitlines() if s.startswith(target + ":"))
+        self.assertIn("designs/ecat_esc/captures/board_soem_start.pcap", rule)
+        self.assertIn("designs/ecat_esc/captures/board_cyclic_k3_s1.allow.json", rule)
 
 
 class LintParserTest(unittest.TestCase):

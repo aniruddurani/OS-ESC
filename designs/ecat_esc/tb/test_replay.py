@@ -1,8 +1,5 @@
-"""Capture replay machinery: pcap reading and the response comparison.
-
-The real-capture test (test_replay_real_captures) is not in the manifest while
-captures/ holds no .pcap files: a skipped test must not count as a pass."""
-import glob
+"""Capture replay machinery: pcap reading and the response comparison, and the replay of the
+recordings in captures/ (test_replay_real_captures)."""
 import os
 import random
 
@@ -12,7 +9,7 @@ import model_path  # noqa: F401
 
 from ecat import CMD, Datagram, SlaveModel, build_frame
 from pcap import read_pcap, write_pcap
-from replay import allowed, datagram_differences, pair_requests_and_responses, unexpected
+from replay import allowed, capture_files, datagram_differences, pair_requests_and_responses, unexpected
 from top_util import RAM, send_and_collect, start
 
 CAPTURES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "captures")
@@ -79,12 +76,13 @@ async def test_replay_harness_reports_a_tampered_response(dut):
     assert [(d[0], d[1], d[2]) for d in diffs] == [(1, 0, "data")]
 
 
-@cocotb.test(skip=not glob.glob(os.path.join(CAPTURES, "*.pcap")))
+@cocotb.test()
 async def test_replay_real_captures(dut):
-    # Skipped while captures/ is empty: NOT VERIFIED AGAINST REAL HARDWARE.
-    files = sorted(glob.glob(os.path.join(CAPTURES, "*.pcap")))
+    files = capture_files(CAPTURES)
     mon, model, rng = await start(dut, 63)
     for path in files:
-        diffs = await replay(dut, mon, read_pcap(path))
+        packets = read_pcap(path)
+        assert packets, f"{os.path.basename(path)} holds no frames"
+        diffs = await replay(dut, mon, packets)
         bad = unexpected(diffs, allowed(path))
         assert not bad, f"{os.path.basename(path)}: {bad[:5]}"

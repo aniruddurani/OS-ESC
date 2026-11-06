@@ -269,7 +269,8 @@ def cmd_bsoem(a):
         return write_report(a.out, "bsoem", a.design, "error", {},
                             [{"message": f"evidence missing: {a.build_id_file}"}], a.result)
     status, metrics, errors = evaluate_bsoem(program(a.result), program(a.config_result),
-                                             _read_json(a.before), _read_json(a.after), build)
+                                             _read_json(a.before), _read_json(a.after), build,
+                                             _read_json(a.between))
     return write_report(a.out, "bsoem", a.design, status, metrics, errors, a.result)
 
 
@@ -545,6 +546,7 @@ def build_parser():
     s.add_argument("--result", required=True, help="the SOEM test's stdout")
     s.add_argument("--config-result", required=True, help="soem_config's stdout")
     s.add_argument("--before", required=True, help="board status before the test")
+    s.add_argument("--between", required=True, help="board status from the soft reset between the programs")
     s.add_argument("--after", required=True, help="board status after the test")
     s.add_argument("--build-id-file", required=True)
     s.add_argument("--design", required=True)

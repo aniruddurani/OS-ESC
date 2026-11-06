@@ -109,14 +109,14 @@ $(SOEM_EXE) $(SOEM_CONFIG_EXE): $(wildcard $(BOARD)/../soem_test/*.c) $(BOARD)/.
 $(DSTAMPS)/bsoem.pass: $(DSTAMPS)/bprog.pass $(SOEM_EXE) $(SOEM_CONFIG_EXE)
 	@mkdir -p $(DREPORTS) $(DLOGS) $(DSTAMPS)
 	@rm -f $@ $(DREPORTS)/bsoem.json $(DLOGS)/bsoem.out $(DLOGS)/bsoem_config.out \
-	  $(DLOGS)/bsoem_before.json $(DLOGS)/bsoem_after.json
+	  $(DLOGS)/bsoem_before.json $(DLOGS)/bsoem_between.json $(DLOGS)/bsoem_after.json
 	-$(BSTATUS) reset --stp "$(STP)" > $(DLOGS)/bsoem_before.json
 	-"$(SOEM_EXE)" '$(BOARD_NPF)' > $(DLOGS)/bsoem.out 2> $(DLOGS)/bsoem.err
-	-$(BSTATUS) reset --stp "$(STP)" > /dev/null
+	-$(BSTATUS) reset --stp "$(STP)" > $(DLOGS)/bsoem_between.json
 	-"$(SOEM_CONFIG_EXE)" '$(BOARD_NPF)' > $(DLOGS)/bsoem_config.out 2> $(DLOGS)/bsoem_config.err
 	-$(BSTATUS) read --stp "$(STP)" > $(DLOGS)/bsoem_after.json
 	$(PY) bsoem --result $(DLOGS)/bsoem.out --config-result $(DLOGS)/bsoem_config.out \
-	  --before $(DLOGS)/bsoem_before.json \
+	  --before $(DLOGS)/bsoem_before.json --between $(DLOGS)/bsoem_between.json \
 	  --after $(DLOGS)/bsoem_after.json --build-id-file $(BUILD_ID_FILE) \
 	  --design $(DDESIGN) --out $(DREPORTS)/bsoem.json
 	@touch $@

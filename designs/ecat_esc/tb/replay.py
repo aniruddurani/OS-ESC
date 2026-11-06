@@ -6,10 +6,23 @@ Because an ESC of a different make reports different identity registers, replay
 returns the differences datagram by datagram and a test accepts only those listed
 in an allowlist next to the capture (<name>.allow.json), which starts empty.
 """
+import glob
+import os
 import struct
 
 import model_path  # noqa: F401
 from ecat import FrameError, parse_frame
+
+# Replayed by test_replay_real_captures: losing one must fail, not quietly replay fewer.
+REQUIRED_CAPTURES = ("board_cyclic_k3_s1.pcap", "board_soem_start.pcap")
+
+
+def capture_files(folder):
+    """Every .pcap in `folder`, sorted, which must include REQUIRED_CAPTURES."""
+    files = sorted(glob.glob(os.path.join(folder, "*.pcap")))
+    missing = sorted(set(REQUIRED_CAPTURES) - {os.path.basename(p) for p in files})
+    assert not missing, f"captures missing: {missing}"
+    return files
 
 
 def pair_requests_and_responses(packets):
