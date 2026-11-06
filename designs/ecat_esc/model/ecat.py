@@ -15,12 +15,17 @@ import struct
 import zlib
 from dataclasses import dataclass, replace
 
+import sii
+
 ETHERTYPE = 0x88A4
 CMD = {"NOP": 0, "APRD": 1, "APWR": 2, "APRW": 3, "FPRD": 4, "FPWR": 5, "FPRW": 6,
        "BRD": 7, "BWR": 8, "BRW": 9, "LRD": 10, "LWR": 11, "LRW": 12}
 NAME = {v: k for k, v in CMD.items()}
 
 REG_SPACE = 0x1000          # registers below, process RAM from here
+AL_INIT = 1
+AL_STATES = (1, 2, 3, 4, 8)  # INIT, PRE-OP, BOOT, SAFE-OP, OP
+SII_NACK = 0x20              # bit 5 of 0x0503
 FMMU_BASE, FMMU_SIZE = 0x0600, 16
 SM_BASE, SM_SIZE = 0x0800, 8
 MIN_FRAME, MAX_FRAME = 64, 1518     # on the wire, including the 4-byte FCS
@@ -135,6 +140,10 @@ class SlaveModel:
         self.regs[0x0004], self.regs[0x0005] = n_fmmu, n_sm
         self.regs[0x0006] = ram_bytes // 1024
         self.regs[0x0007] = 0x03
+        self.regs[0x0110], self.regs[0x0111] = 0x11, 0x02     # EEPROM loaded, port 0 link, open
+        self.regs[0x0130] = AL_INIT
+        self.regs[0x0141] = 0x01                              # device emulation
+        self.regs[0x0508:0x050C] = sii.read32(0)
         self.station_address = station_address
 
     @property
@@ -162,13 +171,28 @@ class SlaveModel:
             return (offset - FMMU_BASE) % FMMU_SIZE <= 12        # bytes 13..15 reserved
         if SM_BASE <= offset < SM_BASE + SM_SIZE * self.n_sm:
             return (offset - SM_BASE) % SM_SIZE not in (5, 7)    # status, PDI activate
-        return 0x0010 <= offset < 0x0012
+        return 0x0010 <= offset < 0x0012 or 0x0120 <= offset < 0x0122 or 0x0504 <= offset < 0x0508
 
     def _write(self, span, data):
         buf, off = span
         for i, b in enumerate(data):
             if self._writable(buf, off + i):
                 buf[off + i] = b
+            if buf is self.regs:
+                self._al_sii_write(off + i, b)
+
+    def _al_sii_write(self, offset, value):
+        """Device emulation and the read-only SII interface, byte by byte as rtl/al_sii.v: AL
+        status follows a defined state, the SII data register follows the address, and a
+        command other than read or NOP is refused with NACK until a NOP clears it."""
+        if offset == 0x0120 and value & 0xF in AL_STATES:
+            self.regs[0x0130] = value & 0xF
+        elif offset == 0x0500:
+            self.regs[0x0500] = value & 1
+        elif offset == 0x0503 and value & 7 != 1:
+            self.regs[0x0503] = SII_NACK if value & 7 else 0
+        elif 0x0504 <= offset < 0x0508:
+            self.regs[0x0508:0x050C] = sii.read32(int.from_bytes(self.regs[0x0504:0x0508], "little"))
 
     @staticmethod
     def _read(span, n):

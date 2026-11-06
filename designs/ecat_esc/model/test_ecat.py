@@ -6,6 +6,7 @@ import unittest
 import zlib
 
 import ecat
+import sii
 from ecat import CMD, Datagram, SlaveModel, build_frame, parse_frame
 
 
@@ -387,6 +388,87 @@ class FrameValidityTest(unittest.TestCase):
         dgs = [Datagram(CMD["LRW"], 9, 0x12345678, bytes(range(10)), irq=0x0102, more=True, wkc=3),
                Datagram(CMD["BRD"], 10, 0, b"\xff")]
         self.assertEqual(parse_frame(build_frame(dgs)), dgs)
+
+
+class AlSiiTest(unittest.TestCase):
+    def setUp(self):
+        self.s = SlaveModel()
+
+    def write(self, ado, data):
+        run(self.s, [Datagram(CMD["APWR"], 1, adp_ado(0, ado), bytes(data))])
+
+    def read(self, ado, n):
+        return run(self.s, [Datagram(CMD["APRD"], 1, adp_ado(0, ado), bytes(n))])[0].data
+
+    def test_al_starts_in_init(self):
+        self.assertEqual(self.read(0x0130, 2), b"\x01\x00")
+
+    def test_al_follows_each_defined_state(self):
+        for state in (2, 4, 8, 3, 1):
+            self.write(0x0120, [state, 0])
+            self.assertEqual(self.read(0x0130, 2), bytes([state, 0]))
+
+    def test_init_ack_shows_no_error(self):
+        self.write(0x0120, [0x02, 0])
+        self.write(0x0120, [0x11, 0])
+        self.assertEqual(self.read(0x0130, 2), b"\x01\x00")
+
+    def test_undefined_state_is_ignored(self):
+        self.write(0x0120, [0x02, 0])
+        for bad in (0, 5, 6, 7, 9, 0xF):
+            self.write(0x0120, [bad, 0])
+            self.assertEqual(self.read(0x0130, 2), b"\x02\x00", bad)
+
+    def test_al_control_reads_back(self):
+        self.write(0x0120, [0x12, 0x34])
+        self.assertEqual(self.read(0x0120, 2), b"\x12\x34")
+
+    def test_al_status_is_read_only(self):
+        self.write(0x0130, [0x08, 0xFF])
+        self.assertEqual(self.read(0x0130, 2), b"\x01\x00")
+
+    def test_al_status_code_and_esc_config(self):
+        self.assertEqual(self.read(0x0134, 2), b"\x00\x00")
+        self.assertEqual(self.read(0x0141, 1), b"\x01")
+
+    def test_dl_status(self):
+        self.assertEqual(self.read(0x0110, 2), b"\x11\x02")
+
+    def test_sii_data_starts_at_word_zero(self):
+        self.assertEqual(self.read(0x0508, 4), sii.read32(0))
+
+    def test_sii_read_in_one_datagram(self):
+        self.write(0x0502, [0x00, 0x01, 0x08, 0x00, 0x00, 0x00])
+        self.assertEqual(self.read(0x0508, 4), sii.read32(8))
+        self.assertEqual(self.read(0x0503, 1), b"\x00")
+        self.assertEqual(self.read(0x0504, 4), b"\x08\x00\x00\x00")
+
+    def test_sii_data_is_read_only(self):
+        self.write(0x0508, b"\x55" * 4)
+        self.assertEqual(self.read(0x0508, 4), sii.read32(0))
+
+    def test_sii_high_address_reads_blank(self):
+        self.write(0x0504, [0x08, 0x00, 0x01, 0x00])
+        self.assertEqual(self.read(0x0508, 4), b"\xff" * 4)
+
+    def test_sii_write_command_naks_and_nop_clears(self):
+        self.write(0x0502, [0x01, 0x02])
+        self.assertEqual(self.read(0x0502, 2), b"\x00\x20")
+        self.write(0x0502, [0x00, 0x00])
+        self.assertEqual(self.read(0x0502, 2), b"\x00\x00")
+
+    def test_reload_naks(self):
+        self.write(0x0502, [0x00, 0x03])
+        self.assertEqual(self.read(0x0503, 1), b"\x20")
+
+    def test_read_command_leaves_nack(self):
+        self.write(0x0502, [0x01, 0x02])
+        self.write(0x0502, [0x00, 0x01])
+        self.assertEqual(self.read(0x0503, 1), b"\x20")
+
+    def test_sii_owner_bit(self):
+        self.write(0x0500, [0xFF])
+        self.assertEqual(self.read(0x0500, 2), b"\x01\x00")
 
 
 if __name__ == "__main__":
