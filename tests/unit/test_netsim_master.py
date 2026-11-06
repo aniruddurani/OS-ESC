@@ -9,8 +9,9 @@ ROOT = os.path.join(os.path.dirname(__file__), "..", "..", "designs", "ecat_esc"
 sys.path.insert(0, os.path.join(ROOT, "netsim"))
 sys.path.insert(0, os.path.join(ROOT, "model"))
 
-from ecat import CMD, MAX_FRAME, MIN_FRAME, NAME, parse_frame  # noqa: E402
+from ecat import CMD, MAX_FRAME, MIN_FRAME, NAME, Datagram, build_frame, parse_frame  # noqa: E402
 from master import Master  # noqa: E402
+from network import Chain  # noqa: E402
 from scenarios import FAULTS, SCENARIOS, clock_config  # noqa: E402
 
 
@@ -92,6 +93,43 @@ class MasterTest(unittest.TestCase):
             gaps = [t.ifg for t in drain(Master(s, seed=2, k=3, frames=1000))]
             self.assertIn(16, set(gaps), s)
             self.assertGreaterEqual(min(gaps), 16, s)
+
+    def test_startup_has_the_soem_sequence(self):
+        k = 2
+        kinds = [(NAME.get(d.cmd), d.address & 0xFFFF, d.address >> 16, d.data)
+                 for t in drain(Master("startup", seed=1, k=k, frames=60)) for d in parse_frame(t.frame)]
+        self.assertIn(("BWR", 0, 0x0120, b"\x11\x00"), [(n, 0, a, x) for n, _, a, x in kinds])
+        for p in range(k + 1):
+            at = kinds.index(("FPWR", 0x1001 + p, 0x0502, b"\x00\x01\x08\x00\x00\x00"))
+            self.assertEqual(kinds[at + 1][:3], ("FPRD", 0x1001 + p, 0x0508))
+            self.assertIn(("FPWR", 0x1001 + p, 0x0120, b"\x02\x00"), kinds)
+            self.assertIn(("FPRD", 0x1001 + p, 0x0130, bytes(2)), [(n, s, a, bytes(len(x))) for n, s, a, x in kinds])
+
+    def test_random_reaches_al_and_sii(self):
+        ados = [d.address >> 16 for t in drain(Master("random", seed=3, k=3, frames=4000))
+                for d in parse_frame(t.frame)
+                if d.cmd not in (CMD["NOP"], CMD["LRD"], CMD["LWR"], CMD["LRW"])]
+        self.assertTrue(any(0x0120 <= a < 0x0150 for a in ados))
+        self.assertTrue(any(0x0500 <= a < 0x0510 for a in ados))
+
+    def test_random_has_no_rw_over_dependent_registers(self):
+        # The RTL sees its own write inside a read-write datagram; the model reads all, then
+        # writes. A datagram spanning a register and what depends on it means nothing to a
+        # master, so traffic must not hold one.
+        rw = (CMD["APRW"], CMD["FPRW"], CMD["BRW"])
+        for t in drain(Master("random", seed=9, k=3, frames=20000)):
+            for d in parse_frame(t.frame):
+                if d.cmd in rw:
+                    lo, hi = d.address >> 16, (d.address >> 16) + len(d.data)
+                    self.assertFalse(lo < 0x0132 and hi > 0x0120, hex(lo))
+                    self.assertFalse(lo < 0x050C and hi > 0x0502, hex(lo))
+
+    def test_chain_brd_of_al_status_ors(self):
+        chain = Chain(1, ram_bytes=256)
+        chain.forward(build_frame([Datagram(CMD["APWR"], 1, 0x0120 << 16, b"\x02\x00"),
+                                   Datagram(CMD["APWR"], 2, (0x0120 << 16) | 0xFFFF, b"\x04\x00")]))
+        _, reply = chain.forward(build_frame([Datagram(CMD["BRD"], 3, 0x0130 << 16, bytes(2))]))
+        self.assertEqual(parse_frame(reply)[0].data, b"\x06\x00")
 
     def test_random_uses_unsupported_commands(self):
         cmds = {c for c, _ in commands(drain(Master("random", seed=5, k=3, frames=2000)))}

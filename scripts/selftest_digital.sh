@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Prove the digital gates catch real faults: each known-bad input must fail the gate
-# built for them (dlint, dsim, dpnr, and seven for dnet), and a failure must stop the
+# built for them (dlint, dsim, dpnr, and nine for dnet), and a failure must stop the
 # stages after it.
 # Run inside the container via `make dselftest`. Prints DSELFTEST PASS or exits 1.
 set -u
@@ -102,6 +102,14 @@ echo "net_diagfcs: a CRC-failure counter that never counts must fail dnet's faul
 net_mutant net_diagfcs diag.v "c_crc_failures <= sat_add(c_crc_failures, 2'd1)" \
   "s/c_crc_failures <= sat_add(c_crc_failures, 2'd1)/c_crc_failures <= sat_add(c_crc_failures, 2'd0)/"
 expect "an error names crc in the fault evidence" "$(grep -c 'fault evidence: .*crc' $ROOT/net_diagfcs/reports/dnet.json | sed 's/^[1-9].*/yes/;s/^0$/no/')" yes
+
+echo "net_alstuck: AL status stuck at INIT must fail dnet with mismatches"
+net_mutant net_alstuck al_sii.v "al_state <= wd1\[3:0\];" "s/al_state <= wd1\[3:0\];/al_state <= 4'd1;/"
+expect "mismatches > 0" "$(metric_of $ROOT/net_alstuck/reports/dnet.json mismatches | sed 's/^[1-9][0-9]*$/yes/')" yes
+
+echo "net_siioff: SII data one word off must fail dnet with mismatches"
+net_mutant net_siioff al_sii.v "rom_a <= sii_addr\[6:0\];" "s/rom_a <= sii_addr\[6:0\];/rom_a <= sii_addr[6:0] + 7'd1;/"
+expect "mismatches > 0" "$(metric_of $ROOT/net_siioff/reports/dnet.json mismatches | sed 's/^[1-9][0-9]*$/yes/')" yes
 
 # The checker itself: the unchanged RTL and bench, with one fault injected into the harness.
 for sab in checker drop-reply; do

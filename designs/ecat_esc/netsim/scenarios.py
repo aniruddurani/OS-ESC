@@ -23,6 +23,7 @@ AREA = MAX_FRAME - 4 - 14 - 2       # datagram bytes that fit one frame (headers
 ARMW, FRMW = 13, 14                 # commands the ESC does not implement
 MIN_IFG = 16                        # 64 bit times: the shortest gap after a repeater shrinks 96
 DIAG_BASE, DIAG_END = 0x0E00, 0x0F00
+DEPENDENT = ((0x0120, 0x0132), (0x0502, 0x050C))     # AL control to status, SII command to data
 FMMU_BASE = 0x0600
 
 
@@ -146,7 +147,19 @@ class Net:
         out += self.frames([self.dg(CMD["FPWR"], self.station(p), 0x0800, self.sm_layout())
                             for p in range(k + 1)])
         out += self.frames([self.dg(CMD["BWR"], 0, 0x1000, bytes(self.ram))])
-        return out
+        return out + self.soem_sequence()
+
+    def soem_sequence(self):
+        """What SOEM's start-up does to the AL and SII registers: reset to INIT, read the
+        identity words with command and address in one datagram, then ask for PRE-OP."""
+        dgs = [self.dg(CMD["BWR"], 0, 0x0120, b"\x11\x00")]
+        for p in range(self.k + 1):
+            for word in (8, 10, 12, 14):
+                dgs.append(self.dg(CMD["FPWR"], self.station(p), 0x0502, struct.pack("<HI", 0x0100, word)))
+                dgs.append(self.dg(CMD["FPRD"], self.station(p), 0x0508, bytes(4)))
+            dgs.append(self.dg(CMD["FPWR"], self.station(p), 0x0120, b"\x02\x00"))
+            dgs.append(self.dg(CMD["FPRD"], self.station(p), 0x0130, bytes(2)))
+        return self.frames(dgs)
 
     def lrw(self, extra=()):
         n = (self.k + 1) * self.window
@@ -168,12 +181,16 @@ class Net:
         ado = r.choice([r.randrange(0x1000), 0x1000 + r.randrange(ram), 0x1000 - r.randint(1, 16),
                         0x1000 + ram - n, 0x1000 + ram - n + 1, 0x0D00 + r.randrange(0x100),
                         0x0600 + r.randrange(16 * self.n_fmmu), 0x0800 + r.randrange(8 * self.n_sm),
-                        0x0000, 0x0010])
+                        0x0000, 0x0010, 0x0120 + r.randrange(0x30), 0x0500 + r.randrange(0x10)])
         # The model has no diag block (0x0E00-0x0EFF; the final read checks it), and random
         # bytes written to the FMMUs could map one onto it: such accesses move to process RAM.
+        # So does a read-write datagram over registers that depend on each other: the RTL sees
+        # its own write, the model reads all, then writes, and no master sends one.
         fmmu_end = FMMU_BASE + 16 * self.n_fmmu
         writes = cmd not in (CMD["APRD"], CMD["FPRD"], CMD["BRD"], ARMW, FRMW)
-        if (ado < DIAG_END and ado + n > DIAG_BASE) or (writes and ado < fmmu_end and ado + n > FMMU_BASE):
+        rw = cmd in (CMD["APRW"], CMD["FPRW"], CMD["BRW"])
+        if (ado < DIAG_END and ado + n > DIAG_BASE) or (writes and ado < fmmu_end and ado + n > FMMU_BASE) \
+                or (rw and any(ado < end and ado + n > base for base, end in DEPENDENT)):
             ado = 0x1000 + r.randrange(ram)
         if cmd in (CMD["APRD"], CMD["APWR"], CMD["APRW"]):
             adp = -r.randint(-1, k + 1)
