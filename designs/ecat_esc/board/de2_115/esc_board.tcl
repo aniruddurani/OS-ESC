@@ -1,13 +1,13 @@
 # Creates and compiles the esc_board project (the ESC on a DE2-115) in the current
 # directory. Run from the build directory:
 #   quartus_sh -t <repo>/designs/ecat_esc/board/de2_115/esc_board.tcl \
-#       [-pll_mul 8] [-pll_div 5] [-rtl_dir <dir with esc_top and its blocks>]
+#       [-pll_mul 8] [-pll_div 5] [-rtl_dir <dir with esc_top and its blocks>] [-build_id N]
 # Pins: LiteX terasic_de2_115.py (ENET0 in MII mode), checked against the Terasic manual.
 load_package flow
 
 set here [file dirname [file normalize [info script]]]
 set repo [file normalize $here/../../../..]
-array set opt [list -pll_mul 8 -pll_div 5 -rtl_dir $repo/designs/ecat_esc/rtl]
+array set opt [list -pll_mul 8 -pll_div 5 -rtl_dir $repo/designs/ecat_esc/rtl -build_id 1]
 foreach {k v} $quartus(args) {
     if {![info exists opt($k)]} { error "unknown option $k" }
     set opt($k) $v
@@ -42,6 +42,7 @@ foreach f [lsort [glob $here/rtl/*.v]] { set_global_assignment -name VERILOG_FIL
 set_global_assignment -name SDC_FILE $here/esc_board.sdc
 set_parameter -name PLL_MUL $opt(-pll_mul)
 set_parameter -name PLL_DIV $opt(-pll_div)
+set_parameter -name BUILD_ID $opt(-build_id)
 
 proc pin {port loc std} {
     set_location_assignment PIN_$loc -to $port

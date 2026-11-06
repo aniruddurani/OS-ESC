@@ -98,6 +98,13 @@ class RunBoardTest(unittest.TestCase):
         self.assertIn("configuring", res["runs"][0]["error"])
         self.assertNotIn("link", board.calls)
 
+    def test_wrong_image_is_error(self):
+        board = FakeBoard()
+        res = run(board, only="cyclic_k3_s1", build_id=77)
+        self.assertIn("77", res["runs"][0]["error"])
+        self.assertNotIn("link", board.calls)
+        self.assertEqual(res["build_id"], 77)
+
     def test_sticky_after_run_sets_flags_seen(self):
         board = FakeBoard(after=dict(LINK_UP, sticky=dict(LINK_UP["sticky"], tx_overflow=1)))
         res = run(board, only="cyclic_k3_s1")

@@ -15,8 +15,17 @@ def table(title, header, rows):
     return "\n".join(out + [line, ""])
 
 
-def sta_rpt(slack=None, models=MODELS, core_mhz="80.0", unconstrained=0):
-    """slack: {(model, kind, clock): value} overriding the default 1.0."""
+def empty_table(title):
+    line = "-" * 40
+    return "\n".join([line, f"; {title} ;", line, "No paths to report.", ""])
+
+
+KINDS = ("Setup", "Hold", "Recovery", "Removal", "Minimum Pulse Width")
+
+
+def sta_rpt(slack=None, models=MODELS, core_mhz="80.0", unconstrained=0, skip=(), no_paths=()):
+    """slack: {(model, kind, clock): value} overriding the default 1.0. skip: kinds left out
+    of the report; no_paths: kinds that report no paths, as Quartus prints them."""
     slack = slack or {}
     clocks = ["CLOCK_50", CORE, "ENET0_RX_CLK", "ENET0_TX_CLK"]
     parts = [table("Clocks", ["Clock Name", "Type", "Period", "Frequency"],
@@ -25,7 +34,12 @@ def sta_rpt(slack=None, models=MODELS, core_mhz="80.0", unconstrained=0):
                     ["ENET0_RX_CLK", "Base", "40.000", "25.0 MHz"],
                     ["ENET0_TX_CLK", "Base", "40.000", "25.0 MHz"]])]
     for m in models:
-        for kind in ("Setup", "Hold"):
+        for kind in KINDS:
+            if kind in skip:
+                continue
+            if kind in no_paths:
+                parts.append(empty_table(f"{m} Model {kind} Summary"))
+                continue
             parts.append(table(f"{m} Model {kind} Summary", ["Clock", "Slack", "End Point TNS"],
                                [[c, f"{slack.get((m, kind, c), 1.0):.3f}", "0.000"] for c in clocks]))
     parts.append(table("Unconstrained Paths Summary", ["Property", "Setup", "Hold"],
@@ -81,6 +95,33 @@ class BbuildTest(unittest.TestCase):
     def test_negative_hold_is_fail(self):
         status, _, _ = run(sta=sta_rpt({("Fast 1200mV 0C", "Hold", "ENET0_RX_CLK"): -0.1}))
         self.assertEqual(status, "fail")
+
+    def test_negative_recovery_is_fail(self):
+        status, metrics, errors = run(sta=sta_rpt({("Fast 1200mV 0C", "Recovery", "ENET0_TX_CLK"): -0.2}))
+        self.assertEqual(status, "fail")
+        self.assertEqual(metrics["worst_recovery_ns"], -0.2)
+        self.assertIn("recovery slack", " ".join(e["message"] for e in errors))
+
+    def test_negative_removal_is_fail(self):
+        status, metrics, _ = run(sta=sta_rpt({("Slow 1200mV 0C", "Removal", "CLOCK_50"): -0.1}))
+        self.assertEqual((status, metrics["worst_removal_ns"]), ("fail", -0.1))
+
+    def test_negative_pulse_width_is_fail(self):
+        status, metrics, _ = run(sta=sta_rpt({("Slow 1200mV 85C", "Minimum Pulse Width", CORE): -0.3}))
+        self.assertEqual((status, metrics["worst_pulse_width_ns"]), ("fail", -0.3))
+
+    def test_missing_recovery_table_is_error(self):
+        status, _, _ = run(sta=sta_rpt(skip=("Recovery",)))
+        self.assertEqual(status, "error")
+
+    def test_recovery_with_no_paths_is_not_a_failure(self):
+        status, metrics, errors = run(sta=sta_rpt(no_paths=("Recovery", "Removal")))
+        self.assertEqual(status, "pass", errors)
+        self.assertIsNone(metrics["worst_recovery_ns"])
+
+    def test_setup_with_no_paths_is_error(self):
+        status, _, _ = run(sta=sta_rpt(no_paths=("Setup",)))
+        self.assertEqual(status, "error")
 
     def test_missing_timing_model_is_error(self):
         status, _, errors = run(sta=sta_rpt(models=MODELS[:2]))
@@ -162,37 +203,57 @@ LINK = {"build_id": 1, "state": "link_100fd",
         "sticky": {"rx_overflow": 0, "tx_overflow": 0, "tx_underrun": 0}}
 
 
+class CliBuildIdTest(unittest.TestCase):
+    def test_buildid_writes_a_decimal_id(self):
+        import os
+        import tempfile
+        from flowlib.cli import main
+        d = tempfile.mkdtemp()
+        with open(os.path.join(d, "a.v"), "w") as f:
+            f.write("module a; endmodule\n")
+        out = os.path.join(d, "build_id.txt")
+        self.assertEqual(main(["buildid", "--dir", d, "--settings", "8/5", "--out", out]), 0)
+        with open(out) as f:
+            self.assertTrue(f.read().isdigit())
+
+
 class BprogTest(unittest.TestCase):
     def test_bprog_pass_needs_jtag_id_and_link(self):
         from flowlib.board import evaluate_bprog
-        status, metrics, errors = evaluate_bprog(PGM_OK, LINK)
+        status, metrics, errors = evaluate_bprog(PGM_OK, LINK, 1)
         self.assertEqual(status, "pass", errors)
         self.assertEqual(metrics["state"], "link_100fd")
 
     def test_bprog_wrong_link_is_fail(self):
         from flowlib.board import evaluate_bprog
-        status, _, errors = evaluate_bprog(PGM_OK, dict(LINK, state="wrong_link"))
+        status, _, errors = evaluate_bprog(PGM_OK, dict(LINK, state="wrong_link"), 1)
         self.assertEqual(status, "fail")
         self.assertIn("wrong_link", errors[0]["message"])
 
     def test_bprog_sticky_flag_is_fail(self):
         from flowlib.board import evaluate_bprog
-        status, _, _ = evaluate_bprog(PGM_OK, dict(LINK, sticky=dict(LINK["sticky"], tx_underrun=1)))
+        status, _, _ = evaluate_bprog(PGM_OK, dict(LINK, sticky=dict(LINK["sticky"], tx_underrun=1)), 1)
         self.assertEqual(status, "fail")
 
     def test_bprog_no_status_is_error(self):
         from flowlib.board import evaluate_bprog
-        status, _, _ = evaluate_bprog(PGM_OK, None)
+        status, _, _ = evaluate_bprog(PGM_OK, None, 1)
         self.assertEqual(status, "error")
 
     def test_bprog_other_jtag_id_is_error(self):
         from flowlib.board import evaluate_bprog
-        status, _, _ = evaluate_bprog(PGM_OK.replace("0x020F70DD", "0x020F30DD"), LINK)
+        status, _, _ = evaluate_bprog(PGM_OK.replace("0x020F70DD", "0x020F30DD"), LINK, 1)
         self.assertEqual(status, "error")
+
+    def test_bprog_other_image_on_the_board_is_error(self):
+        from flowlib.board import evaluate_bprog
+        status, _, errors = evaluate_bprog(PGM_OK, LINK, 77)
+        self.assertEqual(status, "error")
+        self.assertIn("77", errors[0]["message"])
 
     def test_bprog_configuration_not_succeeded_is_error(self):
         from flowlib.board import evaluate_bprog
-        status, _, _ = evaluate_bprog(PGM_OK.replace("Configuration succeeded", "Configuration failed"), LINK)
+        status, _, _ = evaluate_bprog(PGM_OK.replace("Configuration succeeded", "Configuration failed"), LINK, 1)
         self.assertEqual(status, "error")
 
 
@@ -208,7 +269,8 @@ def board_results(**over):
                  board_before=LINK, board_after=LINK)
         r.update(kw)
         return r
-    doc = dict(size="quick", runs=[one("startup"), one("cyclic")], not_applicable=["clocks", "faults"])
+    doc = dict(size="quick", runs=[one("startup"), one("cyclic")], not_applicable=["clocks", "faults"],
+               build_id=1)
     doc.update(over)
     return doc
 
@@ -216,7 +278,7 @@ def board_results(**over):
 class BnetTest(unittest.TestCase):
     def test_bnet_pass(self):
         from flowlib.board import evaluate_bnet
-        status, metrics, errors = evaluate_bnet(board_results(), BOARD_MANIFEST, "quick")
+        status, metrics, errors = evaluate_bnet(board_results(), BOARD_MANIFEST, "quick", 1)
         self.assertEqual(status, "pass", errors)
         self.assertEqual(metrics["frames"], 22)
 
@@ -224,21 +286,21 @@ class BnetTest(unittest.TestCase):
         from flowlib.board import evaluate_bnet
         doc = board_results()
         doc["runs"][1]["metrics"]["mismatches"] = 2
-        status, _, _ = evaluate_bnet(doc, BOARD_MANIFEST, "quick")
+        status, _, _ = evaluate_bnet(doc, BOARD_MANIFEST, "quick", 1)
         self.assertEqual(status, "fail")
 
     def test_bnet_flag_on_board_is_fail(self):
         from flowlib.board import evaluate_bnet
         doc = board_results()
         doc["runs"][0]["metrics"]["flags_seen"] = 2
-        status, _, _ = evaluate_bnet(doc, BOARD_MANIFEST, "quick")
+        status, _, _ = evaluate_bnet(doc, BOARD_MANIFEST, "quick", 1)
         self.assertEqual(status, "fail")
 
     def test_bnet_link_lost_after_run_is_fail(self):
         from flowlib.board import evaluate_bnet
         doc = board_results()
         doc["runs"][1]["board_after"] = dict(LINK, state="configuring")
-        status, _, errors = evaluate_bnet(doc, BOARD_MANIFEST, "quick")
+        status, _, errors = evaluate_bnet(doc, BOARD_MANIFEST, "quick", 1)
         self.assertEqual(status, "fail")
         self.assertIn("configuring", " ".join(e["message"] for e in errors))
 
@@ -246,19 +308,25 @@ class BnetTest(unittest.TestCase):
         from flowlib.board import evaluate_bnet
         doc = board_results()
         del doc["runs"][0]["board_after"]
-        status, _, _ = evaluate_bnet(doc, BOARD_MANIFEST, "quick")
+        status, _, _ = evaluate_bnet(doc, BOARD_MANIFEST, "quick", 1)
         self.assertEqual(status, "error")
 
     def test_bnet_wrong_not_applicable_is_error(self):
         from flowlib.board import evaluate_bnet
-        status, _, _ = evaluate_bnet(board_results(not_applicable=["clocks"]), BOARD_MANIFEST, "quick")
+        status, _, _ = evaluate_bnet(board_results(not_applicable=["clocks"]), BOARD_MANIFEST, "quick", 1)
         self.assertEqual(status, "error")
+
+    def test_bnet_other_image_is_error(self):
+        from flowlib.board import evaluate_bnet
+        status, _, errors = evaluate_bnet(board_results(), BOARD_MANIFEST, "quick", 77)
+        self.assertEqual(status, "error")
+        self.assertIn("77", " ".join(e["message"] for e in errors))
 
     def test_bnet_too_few_frames_is_error(self):
         from flowlib.board import evaluate_bnet
         doc = board_results()
         doc["runs"][0]["frames"] = 3
-        status, _, _ = evaluate_bnet(doc, BOARD_MANIFEST, "quick")
+        status, _, _ = evaluate_bnet(doc, BOARD_MANIFEST, "quick", 1)
         self.assertEqual(status, "error")
 
 
@@ -270,7 +338,7 @@ SOEM_OK = {"checks": {"brd_count": True, "station_address": True, "fmmu_config":
 class BsoemTest(unittest.TestCase):
     def test_bsoem_all_checks_pass(self):
         from flowlib.board import evaluate_bsoem
-        status, metrics, errors = evaluate_bsoem(SOEM_OK)
+        status, metrics, errors = evaluate_bsoem(SOEM_OK, LINK, LINK, 1)
         self.assertEqual(status, "pass", errors)
         self.assertEqual(metrics["cycles"], 10000)
         self.assertEqual(metrics["cycle_us_median"], 450.0)
@@ -278,26 +346,81 @@ class BsoemTest(unittest.TestCase):
     def test_bsoem_one_check_false_is_fail(self):
         from flowlib.board import evaluate_bsoem
         res = dict(SOEM_OK, checks=dict(SOEM_OK["checks"], fmmu_config=False), **{"pass": False})
-        status, _, errors = evaluate_bsoem(res)
+        status, _, errors = evaluate_bsoem(res, LINK, LINK, 1)
         self.assertEqual(status, "fail")
         self.assertIn("fmmu_config", errors[0]["message"])
 
     def test_bsoem_no_json_is_error(self):
         from flowlib.board import evaluate_bsoem
-        status, _, _ = evaluate_bsoem(None)
+        status, _, _ = evaluate_bsoem(None, LINK, LINK, 1)
         self.assertEqual(status, "error")
 
     def test_bsoem_missing_check_is_error(self):
         from flowlib.board import evaluate_bsoem
         checks = dict(SOEM_OK["checks"])
         del checks["lrw_cycles"]
-        status, _, _ = evaluate_bsoem(dict(SOEM_OK, checks=checks))
+        status, _, _ = evaluate_bsoem(dict(SOEM_OK, checks=checks), LINK, LINK, 1)
         self.assertEqual(status, "error")
+
+    def test_bsoem_board_absent_is_error_even_with_failed_checks(self):
+        from flowlib.board import evaluate_bsoem
+        res = dict(SOEM_OK, checks={k: False for k in SOEM_OK["checks"]}, **{"pass": False})
+        status, _, _ = evaluate_bsoem(res, None, None, 1)
+        self.assertEqual(status, "error")
+
+    def test_bsoem_no_link_before_is_error(self):
+        from flowlib.board import evaluate_bsoem
+        status, _, errors = evaluate_bsoem(SOEM_OK, dict(LINK, state="configuring"), LINK, 1)
+        self.assertEqual(status, "error")
+        self.assertIn("configuring", errors[0]["message"])
+
+    def test_bsoem_other_image_is_error(self):
+        from flowlib.board import evaluate_bsoem
+        status, _, _ = evaluate_bsoem(SOEM_OK, LINK, LINK, 77)
+        self.assertEqual(status, "error")
+
+    def test_bsoem_flag_after_the_run_is_fail(self):
+        from flowlib.board import evaluate_bsoem
+        after = dict(LINK, sticky=dict(LINK["sticky"], rx_overflow=1))
+        status, _, errors = evaluate_bsoem(SOEM_OK, LINK, after, 1)
+        self.assertEqual(status, "fail")
+        self.assertIn("rx_overflow", errors[0]["message"])
 
     def test_bsoem_too_few_cycles_is_error(self):
         from flowlib.board import evaluate_bsoem
-        status, _, _ = evaluate_bsoem(dict(SOEM_OK, cycles=10))
+        status, _, _ = evaluate_bsoem(dict(SOEM_OK, cycles=10), LINK, LINK, 1)
         self.assertEqual(status, "error")
+
+
+class BuildIdTest(unittest.TestCase):
+    def _tree(self):
+        import os
+        import tempfile
+        d = tempfile.mkdtemp()
+        for name, text in (("a.v", "module a; endmodule\n"), ("b.v", "module b; endmodule\n")):
+            with open(os.path.join(d, name), "w") as f:
+                f.write(text)
+        return d
+
+    def test_same_sources_same_id(self):
+        from flowlib.board import build_id
+        d = self._tree()
+        self.assertEqual(build_id([d], "8/5"), build_id([d], "8/5"))
+        self.assertLess(build_id([d], "8/5"), 1 << 24)
+
+    def test_a_changed_source_changes_the_id(self):
+        import os
+        from flowlib.board import build_id
+        d = self._tree()
+        before = build_id([d], "8/5")
+        with open(os.path.join(d, "b.v"), "a") as f:
+            f.write("// changed\n")
+        self.assertNotEqual(build_id([d], "8/5"), before)
+
+    def test_other_settings_change_the_id(self):
+        from flowlib.board import build_id
+        d = self._tree()
+        self.assertNotEqual(build_id([d], "8/5"), build_id([d], "4/1"))
 
 
 class StatusDecodeTest(unittest.TestCase):

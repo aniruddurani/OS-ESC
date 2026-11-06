@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Prove the FPGA board gates catch real faults (the ESC on a DE2-115). Runs on the Windows
 # host through `./flow bselftest`, with the board cabled and powered (SW19 on RUN):
-#   1. an RTL mutant (LRW working counter one short), built and loaded, fails bnet
+#   1. an RTL mutant (LRW working counter one short), built and loaded, fails bnet; with
+#      that image still on the board, bnet and bsoem of the clean build are errors
 #   2. a flipped expected byte and a dropped reply in the harness fail bnet
 #   3. two clean bnet runs back to back both pass (the soft reset between runs works)
 #   4. an impossible core clock (200 MHz) fails bbuild on setup slack
@@ -13,6 +14,7 @@ cd "$(dirname "$0")/.."
 STEP=${1:-main}
 ROOT=build/board_selftest
 MAKE="mingw32-make --no-print-directory -f board.mk"
+CLEAN_ID=build/ecat_esc/board/de2_115/build_id.txt     # checks on the clean build's image
 failures=0
 
 status_of() {  # status_of <report.json> -> the report's status, or "none"
@@ -57,7 +59,7 @@ if [ "$STEP" = nolink ]; then
     exit 1
   fi
   stamped "$ROOT/nolink" dsim bbuild bprog
-  $MAKE bnet DBUILD="$ROOT/nolink" >/dev/null 2>&1
+  $MAKE bnet DBUILD="$ROOT/nolink" BUILD_ID_FILE=$CLEAN_ID >/dev/null 2>&1
   expect "make exit code is non-zero" "$(nonzero $?)" yes
   expect "bnet status" "$(status_of $ROOT/nolink/reports/bnet.json)" error
   expect "no bnet pass stamp" "$([ ! -e $ROOT/nolink/stamps/bnet.pass ] && echo yes || echo no)" yes
@@ -82,13 +84,22 @@ else
   expect "make exit code is non-zero" "$(nonzero $?)" yes
   expect "bnet status" "$(status_of $d/reports/bnet.json)" fail
   expect "mismatches > 0" "$(metric_of $d/reports/bnet.json mismatches | sed 's/^[1-9][0-9]*$/yes/')" yes
+
+  echo "wrong_image: with the mutant still loaded, the clean build's bnet and bsoem must be errors"
+  d=$ROOT/wrong_image
+  stamped "$d" dsim bbuild bprog
+  $MAKE bnet DBUILD="$d" BUILD_ID_FILE=$CLEAN_ID >/dev/null 2>&1
+  expect "bnet status" "$(status_of $d/reports/bnet.json)" error
+  $MAKE bsoem DBUILD="$d" BUILD_ID_FILE=$CLEAN_ID SOEM_DIR=build/ecat_esc/board/soem >/dev/null 2>&1
+  expect "bsoem status" "$(status_of $d/reports/bsoem.json)" error
+  expect "bsoem names the image" "$(grep -c 'holds build' $d/reports/bsoem.json | sed 's/^[1-9].*/yes/;s/^0$/no/')" yes
   clean_board
 
   for sab in checker drop-reply; do
     d=$ROOT/net_$sab
     echo "net_$sab: --sabotage $sab must fail bnet"
     stamped "$d" dsim bbuild bprog
-    $MAKE bnet DBUILD="$d" BNET_ARGS="--sabotage $sab" >/dev/null 2>&1
+    $MAKE bnet DBUILD="$d" BUILD_ID_FILE=$CLEAN_ID BNET_ARGS="--sabotage $sab" >/dev/null 2>&1
     expect "make exit code is non-zero" "$(nonzero $?)" yes
     expect "bnet status" "$(status_of $d/reports/bnet.json)" fail
   done
@@ -99,7 +110,7 @@ else
   for i in 1 2; do
     d=$ROOT/b2b_$i
     stamped "$d" dsim bbuild bprog
-    $MAKE bnet DBUILD="$d" >/dev/null 2>&1
+    $MAKE bnet DBUILD="$d" BUILD_ID_FILE=$CLEAN_ID >/dev/null 2>&1
     expect "bnet run $i" "$(status_of $d/reports/bnet.json)" pass
   done
 

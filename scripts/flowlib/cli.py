@@ -201,19 +201,38 @@ def cmd_bbuild(a):
     return write_report(a.out, "bbuild", a.design, status, metrics, errors, a.sta_rpt)
 
 
+def _read_json(path):
+    """A JSON file's value, or None if it is missing, empty or unreadable."""
+    text = _read(path)
+    try:
+        return json.loads(text) if text else None
+    except ValueError:
+        return None
+
+
+def _read_build_id(path):
+    """The build id bbuild wrote, or None."""
+    text = (_read(path) or "").strip()
+    return int(text) if text.isdigit() else None
+
+
+def cmd_buildid(a):
+    """buildid: the identity of a build, from its sources and settings, into a file."""
+    from flowlib.board import build_id
+    with open(a.out, "w") as f:
+        f.write(str(build_id(a.dir, a.settings)))
+    return 0
+
+
 def cmd_bprog(a):
     """bprog: esc_board.sof loaded over JTAG, and the board's status read back."""
     from flowlib.board import evaluate_bprog
-    log = _read(a.pgm_log)
-    if log is None:
+    log, build = _read(a.pgm_log), _read_build_id(a.build_id_file)
+    if log is None or build is None:
+        gone = a.pgm_log if log is None else a.build_id_file
         return write_report(a.out, "bprog", a.design, "error", {},
-                            [{"message": f"programmer log missing: {a.pgm_log}"}], a.pgm_log)
-    text = _read(a.status_json)
-    try:
-        status = json.loads(text) if text else None
-    except ValueError:
-        status = None
-    s, metrics, errors = evaluate_bprog(log, status)
+                            [{"message": f"evidence missing: {gone}"}], a.pgm_log)
+    s, metrics, errors = evaluate_bprog(log, _read_json(a.status_json), build)
     return write_report(a.out, "bprog", a.design, s, metrics, errors, a.pgm_log)
 
 
@@ -222,9 +241,9 @@ def cmd_bnet(a):
     from flowlib.board import evaluate_bnet
     from flowlib.netsim import read_manifest
     stage = "bnet" if a.size == "quick" else f"bnet_{a.size}"
-    text, manifest_text = _read(a.results), _read(a.manifest)
-    if text is None or manifest_text is None:
-        gone = a.results if text is None else a.manifest
+    text, manifest_text, build = _read(a.results), _read(a.manifest), _read_build_id(a.build_id_file)
+    if text is None or manifest_text is None or build is None:
+        gone = a.results if text is None else a.manifest if manifest_text is None else a.build_id_file
         return write_report(a.out, stage, a.design, "error", {},
                             [{"message": f"board run evidence missing: {gone}"}], a.results)
     try:
@@ -232,7 +251,7 @@ def cmd_bnet(a):
     except ValueError as e:
         return write_report(a.out, stage, a.design, "error", {},
                             [{"message": f"results unreadable: {e}"}], a.results)
-    status, metrics, errors = evaluate_bnet(results, read_manifest(manifest_text), a.size)
+    status, metrics, errors = evaluate_bnet(results, read_manifest(manifest_text), a.size, build)
     return write_report(a.out, stage, a.design, status, metrics, errors, a.results)
 
 
@@ -245,7 +264,11 @@ def cmd_bsoem(a):
         result = json.loads(line) if line else None
     except ValueError:
         result = None
-    status, metrics, errors = evaluate_bsoem(result)
+    build = _read_build_id(a.build_id_file)
+    if build is None:
+        return write_report(a.out, "bsoem", a.design, "error", {},
+                            [{"message": f"evidence missing: {a.build_id_file}"}], a.result)
+    status, metrics, errors = evaluate_bsoem(result, _read_json(a.before), _read_json(a.after), build)
     return write_report(a.out, "bsoem", a.design, status, metrics, errors, a.result)
 
 
@@ -494,9 +517,16 @@ def build_parser():
     s.add_argument("--out", required=True)
     s.set_defaults(func=cmd_bbuild)
 
+    s = sub.add_parser("buildid")
+    s.add_argument("--dir", action="append", required=True, help="source directory")
+    s.add_argument("--settings", required=True, help="build settings that are not in a file")
+    s.add_argument("--out", required=True)
+    s.set_defaults(func=cmd_buildid)
+
     s = sub.add_parser("bprog")
     s.add_argument("--pgm-log", required=True)
     s.add_argument("--status-json", required=True)
+    s.add_argument("--build-id-file", required=True)
     s.add_argument("--design", required=True)
     s.add_argument("--out", required=True)
     s.set_defaults(func=cmd_bprog)
@@ -505,12 +535,16 @@ def build_parser():
     s.add_argument("--results", required=True)
     s.add_argument("--manifest", required=True)
     s.add_argument("--size", choices=["quick", "soak"], required=True)
+    s.add_argument("--build-id-file", required=True)
     s.add_argument("--design", required=True)
     s.add_argument("--out", required=True)
     s.set_defaults(func=cmd_bnet)
 
     s = sub.add_parser("bsoem")
     s.add_argument("--result", required=True, help="the SOEM test's stdout")
+    s.add_argument("--before", required=True, help="board status before the test")
+    s.add_argument("--after", required=True, help="board status after the test")
+    s.add_argument("--build-id-file", required=True)
     s.add_argument("--design", required=True)
     s.add_argument("--out", required=True)
     s.set_defaults(func=cmd_bsoem)

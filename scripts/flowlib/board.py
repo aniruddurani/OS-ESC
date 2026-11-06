@@ -11,11 +11,29 @@ Quartus writes its reports as tables:
     +----------------------+
 
 A table the gate needs that is missing makes the stage `error`, never a pass."""
+import hashlib
+import os
 import re
 
 TIMING_MODELS = ("Slow 1200mV 85C", "Slow 1200mV 0C", "Fast 1200mV 0C")
+TIMING_KINDS = {"Setup": "worst_setup_ns", "Hold": "worst_hold_ns", "Recovery": "worst_recovery_ns",
+                "Removal": "worst_removal_ns", "Minimum Pulse Width": "worst_pulse_width_ns"}
 ESC_INSTANCE = "esc_top:u_esc"
 JTAG_ID = "0x020F70DD"                 # EP4CE115
+
+
+def build_id(dirs, settings):
+    """A 24-bit identity of a build: every *.v and *.sdc directly in `dirs`, and `settings`.
+    The board reports it over JTAG, so a gate can tell that the image it is testing is the
+    one bbuild judged."""
+    h = hashlib.sha256(settings.encode())
+    for d in dirs:
+        for name in sorted(os.listdir(d)):
+            if name.endswith((".v", ".sdc")):
+                h.update(name.encode())
+                with open(os.path.join(d, name), "rb") as f:
+                    h.update(f.read())
+    return int.from_bytes(h.digest()[:3], "big")
 
 
 def _cells(line):
@@ -34,10 +52,10 @@ def parse_table(text, title):
         if not (name == title if isinstance(title, str) else title.fullmatch(name)):
             continue
         j = i + 1
-        while j < len(lines) and not lines[j].lstrip().startswith(";"):
+        while j < len(lines) and lines[j].lstrip().startswith(("+", "-")):
             j += 1
-        if j >= len(lines):
-            return None
+        if j >= len(lines) or not lines[j].lstrip().startswith(";"):
+            return []                  # "No paths to report."
         header = _cells(lines[j])
         rows, k = [], j + 1
         while k < len(lines) and lines[k].lstrip().startswith("+"):
@@ -63,15 +81,17 @@ def evaluate_bbuild(sta_rpt, map_rpt, fit_rpt, expected_params, core_mhz):
     """Verdict on a Quartus build of esc_board from its timing (sta.rpt), synthesis
     (map.rpt) and fitter (fit.rpt) reports. Returns (status, metrics, errors)."""
     errors, failures = [], []
-    metrics = dict(core_mhz=None, worst_setup_ns=None, worst_hold_ns=None, unconstrained=None,
-                   les=None, registers=None, memory_bits=None, latches=None)
+    metrics = dict(core_mhz=None, unconstrained=None, les=None, registers=None, memory_bits=None,
+                   latches=None, **{key: None for key in TIMING_KINDS.values()})
 
-    # Timing: every model, setup and hold, every clock.
-    worst = {"Setup": None, "Hold": None}
+    # Timing: every model, every kind of check, every clock. A kind may report no paths
+    # (recovery and removal need asynchronous resets), but its table must be there, and
+    # setup and hold must have paths.
+    worst = {kind: None for kind in TIMING_KINDS}
     for model in TIMING_MODELS:
-        for kind in ("Setup", "Hold"):
+        for kind in TIMING_KINDS:
             rows = parse_table(sta_rpt, f"{model} Model {kind} Summary")
-            if not rows:
+            if rows is None or (not rows and kind in ("Setup", "Hold")):
                 errors.append({"message": f"timing report has no {model} {kind.lower()} summary"})
                 continue
             for r in rows:
@@ -83,7 +103,7 @@ def evaluate_bbuild(sta_rpt, map_rpt, fit_rpt, expected_params, core_mhz):
                     worst[kind] = slack
                 if slack < 0:
                     failures.append({"message": f"{model} {kind.lower()} slack {slack} ns on {r.get('Clock')}"})
-    metrics["worst_setup_ns"], metrics["worst_hold_ns"] = worst["Setup"], worst["Hold"]
+    metrics.update({key: worst[kind] for kind, key in TIMING_KINDS.items()})
 
     ucp = parse_table(sta_rpt, "Unconstrained Paths Summary")
     if ucp is None:
@@ -135,10 +155,17 @@ def evaluate_bbuild(sta_rpt, map_rpt, fit_rpt, expected_params, core_mhz):
     return status, metrics, errors + failures
 
 
-def evaluate_bprog(pgm_log, status):
+def _other_image(status, build):
+    """Why the board's status does not show the build `build`, or None if it does."""
+    if status.get("build_id") != build:
+        return f"the board holds build {status.get('build_id')}, not the build {build} that bbuild judged"
+    return None
+
+
+def evaluate_bprog(pgm_log, status, build):
     """Verdict on loading esc_board.sof over JTAG: the programmer configured the EP4CE115,
-    and the board then reported the PHY link up at 100 Mbit full duplex with no FIFO flag
-    (`status`: board_status.decode's dict, None if it could not be read)."""
+    and the board then reported the build `build` with the PHY link up at 100 Mbit full
+    duplex and no FIFO flag (`status`: board_status.decode's dict, None if unreadable)."""
     errors, failures = [], []
     metrics = dict(jtag_id=None, state=None, sticky=None, build_id=None)
     m = re.search(r"JTAG ID code (0x[0-9A-Fa-f]{8})", pgm_log)
@@ -151,6 +178,9 @@ def evaluate_bprog(pgm_log, status):
         errors.append({"message": "board status could not be read over JTAG"})
     else:
         metrics.update(state=status["state"], sticky=status["sticky"], build_id=status["build_id"])
+        other = _other_image(status, build)
+        if other:
+            errors.append({"message": other})
         if status["state"] != "link_100fd":
             failures.append({"message": f"PHY state {status['state']}, expected link_100fd"})
         set_flags = [k for k, v in status["sticky"].items() if v]
@@ -163,11 +193,12 @@ def evaluate_bprog(pgm_log, status):
 BNET_NOT_APPLICABLE = ["clocks", "faults"]
 
 
-def evaluate_bnet(results, manifest, size):
+def evaluate_bnet(results, manifest, size, build):
     """Verdict on the netsim scenarios run against the board (run_board.py's results.json):
     the dnet gate's own rules (no mismatch, missing or unexpected reply, no FIFO flag, every
     scenario its minimum frames), with no fault injection to check, plus the board's own
-    status around every run. Returns (status, metrics, errors)."""
+    status around every run, which must show the build `build`. Returns (status, metrics,
+    errors)."""
     from flowlib.netsim import evaluate
     base, metrics, found = evaluate(results, manifest, size, lambda *a, **k: [])
     errors, failures = [], []
@@ -180,7 +211,11 @@ def evaluate_bnet(results, manifest, size):
             continue                       # already an error from evaluate
         if "board_before" not in r or "board_after" not in r:
             errors.append({"message": f"{name}: no board status around the run"})
-        elif r["board_after"].get("state") != "link_100fd":
+            continue
+        other = _other_image(r["board_before"], build)
+        if other:
+            errors.append({"message": f"{name}: {other}"})
+        if r["board_after"].get("state") != "link_100fd":
             failures.append({"message": f"{name}: PHY state {r['board_after'].get('state')} after the run"})
     if base == "error" or errors:
         status = "error"
@@ -193,9 +228,19 @@ SOEM_CHECKS = ("brd_count", "station_address", "fmmu_config", "sm_config", "lrw_
 SOEM_MIN_CYCLES = 10000
 
 
-def evaluate_bsoem(result):
+def evaluate_bsoem(result, before, after, build):
     """Verdict on the SOEM low-level test's JSON (None if it printed none): all five checks
-    present and true, over at least SOEM_MIN_CYCLES LRW cycles."""
+    present and true, over at least SOEM_MIN_CYCLES LRW cycles. `before` and `after` are the
+    board's status around the test (None if unreadable): a board that was not there, not
+    linked or not the build `build` is an error whatever the checks say, and a FIFO flag or
+    a lost link after the test is a failure."""
+    if before is None or after is None:
+        return "error", {}, [{"message": "board status could not be read around the SOEM test"}]
+    other = _other_image(before, build)
+    if other:
+        return "error", {}, [{"message": other}]
+    if before["state"] != "link_100fd":
+        return "error", {}, [{"message": f"board not ready: PHY state {before['state']}"}]
     if result is None:
         return "error", {}, [{"message": "the SOEM test printed no result"}]
     checks = result.get("checks") or {}
@@ -207,5 +252,10 @@ def evaluate_bsoem(result):
         errors.append({"message": f"{result.get('cycles')} LRW cycles, needs {SOEM_MIN_CYCLES}"})
     failures = [{"message": f"SOEM check {name} failed"} for name in SOEM_CHECKS
                 if name in checks and checks[name] is not True]
+    if after["state"] != "link_100fd":
+        failures.append({"message": f"PHY state {after['state']} after the test"})
+    set_flags = [k for k, v in after["sticky"].items() if v]
+    if set_flags:
+        failures.append({"message": f"FIFO flags set by the test: {set_flags}"})
     status = "error" if errors else ("fail" if failures else "pass")
     return status, metrics, errors + failures

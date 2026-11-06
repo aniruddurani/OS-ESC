@@ -197,15 +197,21 @@ multi-port forwarding, distributed clocks, flash programming, sky130 timing.
 
 ## 11. As built
 
-Results on the board (2026-11-05): `bbuild` at 80 MHz, setup +3.277 ns, hold +0.136 ns, 8,614
+Results on the board (2026-11-05): `bbuild` at 80 MHz, setup +3.805 ns, hold +0.133 ns, 8,607
 LEs (7.5%). `bnet` 20,007 frames and the soak 1,000,023 frames, no mismatch, missing or
 unexpected reply and no FIFO flag. `bsoem` all five checks over 10,000 LRW cycles, median
-492 us.
+493 us.
 
 Where the build differs from the text above:
 
 - **`phy_init`'s MDIO** is `mdio_i`, `mdio_o`, `mdio_oe`; `esc_board` drives the pad.
-- **`bbuild`** reads Quartus's own `sta.rpt`, with no script of ours in between.
+- **`bbuild`** reads Quartus's own `sta.rpt`, with no script of ours in between, and judges
+  all its checks, not only setup and hold: recovery, removal and minimum pulse width too.
+- **Build identity**: the probe carries a 24-bit hash of the sources (not a constant 8-bit ID),
+  and `bprog`, `bnet` and `bsoem` are `error` unless the board reports it.
+- **`bsoem`** reads the board's status around the test, so a missing board is `error`, and a
+  FIFO flag or lost link after it is `fail`.
+- **`bwatch`** (added on request) shows the netsim live view on the board, without RTL events.
 - **The RTL Quartus compiles** is a build-time copy of `rtl/` without `pdram.v`'s `$error`
   check, which Quartus Lite cannot parse. The check fires only for an invalid `RAM_BYTES`.
 - **In flight**: one frame at a time, not up to 8, because Npcap's inbound-only filter is

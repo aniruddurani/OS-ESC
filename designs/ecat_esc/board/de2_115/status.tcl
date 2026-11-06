@@ -1,7 +1,7 @@
 # Board status over JTAG, through esc_board's In-System Sources and Probes instance "ESC".
 #   quartus_stp -t status.tcl read    prints "ISSP <probe value in hex>"
 #   quartus_stp -t status.tcl reset   pulses the soft reset (source 0) for 10 ms, then reads
-# board_status.py decodes the value: {BUILD_ID[7:0], 2'b0, PHY state[2:0], sticky[2:0]}.
+# board_status.py decodes the value: {BUILD_ID[23:0], 2'b0, PHY state[2:0], sticky[2:0]}.
 set action [lindex $quartus(args) 0]
 set hw ""
 foreach h [get_hardware_names] { if {[string match "USB-Blaster*" $h]} { set hw $h; break } }

@@ -7,13 +7,13 @@
 //   unlocked, until the link is up at 100 Mbit full duplex, and while the JTAG soft reset
 //   (ISSP source 0) is set
 //   board_flags keeps the FIFO flags sticky; ISSP probes = {BUILD_ID, 2'b0, PHY state,
-//   sticky flags}
+//   sticky flags}, where BUILD_ID identifies the sources this image was built from
 // LEDR[2:0] sticky flags, LEDR[5:3] PHY state, LEDR6 link, LEDR7 PLL locked, LEDR17
 // heartbeat.
 module esc_board #(
     parameter PLL_MUL        = 8,
     parameter PLL_DIV        = 5,
-    parameter [7:0] BUILD_ID = 8'h01
+    parameter [23:0] BUILD_ID = 24'h000001
 ) (
     input         CLOCK_50,
     input         KEY0,              // active low
@@ -109,7 +109,7 @@ module esc_board #(
         .sld_auto_instance_index("YES"),
         .sld_instance_index(0),
         .instance_id("ESC"),
-        .probe_width(16),
+        .probe_width(32),
         .source_width(1),
         .source_initial_value("0"),
         .enable_metastability("NO")

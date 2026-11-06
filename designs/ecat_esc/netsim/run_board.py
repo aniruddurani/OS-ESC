@@ -32,8 +32,10 @@ NOT_APPLICABLE = ["clocks", "faults"]
 FLAG_BITS = {"rx_overflow": 1, "tx_overflow": 2, "tx_underrun": 4}
 
 
-def _ready(status):
-    """Why the board is not ready for a run, or '' if it is."""
+def _ready(status, build_id=None):
+    """Why the board is not ready for a run, or '' if it is. `build_id`: the build it must hold."""
+    if build_id is not None and status["build_id"] != build_id:
+        return f"it holds build {status['build_id']}, not {build_id}"
     if status["state"] != "link_100fd":
         return f"PHY state {status['state']}"
     flags = [k for k, v in status["sticky"].items() if v]
@@ -41,7 +43,7 @@ def _ready(status):
 
 
 def run_board(manifest, size, out, mac, stp, only=None, frames=None, sabotage=None, seed=1,
-              board=board_status, make_link=None):
+              board=board_status, make_link=None, build_id=None):
     if make_link is None:
         from wire_link import WireLink
         make_link = lambda: WireLink(mac)       # noqa: E731
@@ -59,7 +61,7 @@ def run_board(manifest, size, out, mac, stp, only=None, frames=None, sabotage=No
         try:
             board.soft_reset(stp)
             before = board.read_status(stp)
-            why = _ready(before)
+            why = _ready(before, build_id)
             if why:
                 res = dict(spec, config=clock_config(spec["scenario"], spec["seed"]), metrics={},
                            injected={}, diag={}, failures=[], error=f"board not ready: {why}")
@@ -74,7 +76,8 @@ def run_board(manifest, size, out, mac, stp, only=None, frames=None, sabotage=No
             res = res or dict(spec, metrics={}, injected={}, diag={}, failures=[])
             res["error"] = f"board status: {e}"
         results.append(res)
-    doc = dict(size=size, wall_s=time.time() - start, runs=results, not_applicable=NOT_APPLICABLE)
+    doc = dict(size=size, wall_s=time.time() - start, runs=results, not_applicable=NOT_APPLICABLE,
+               build_id=build_id)
     with open(os.path.join(out, "results.json"), "w") as f:
         json.dump(doc, f, indent=1)
     return doc
@@ -107,6 +110,7 @@ def main(argv=None):
     p.add_argument("--sabotage", choices=["checker", "drop-reply"],
                    help="self-test only: flip one expected byte, or drop one reply, in the first run")
     p.add_argument("--seed", type=int, default=1)
+    p.add_argument("--build-id", type=int, help="the build the board must hold")
     p.add_argument("--watch", action="store_true", help="the live view on the board, not a gate")
     p.add_argument("--scenario", default="cyclic")
     p.add_argument("--k", type=int, default=3)
@@ -118,7 +122,7 @@ def main(argv=None):
     if not a.manifest:
         p.error("--manifest is required without --watch")
     doc = run_board(read_manifest(a.manifest), a.size, a.out, a.mac, a.stp, a.only, a.frames,
-                    a.sabotage, a.seed)
+                    a.sabotage, a.seed, build_id=a.build_id)
     print(f"{len(doc['runs'])} runs in {doc['wall_s']:.1f}s")
     return 0
 

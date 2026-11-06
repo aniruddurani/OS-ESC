@@ -5,7 +5,7 @@
     python board_status.py wait  [--stp EXE] --seconds S --out F
         read until the PHY is link_100fd or S seconds pass; write the last read (or null)
 
-The probe value is {BUILD_ID[7:0], 2'b0, PHY state[2:0], sticky[2:0]}."""
+The probe value is {BUILD_ID[23:0], 2'b0, PHY state[2:0], sticky[2:0]}."""
 import argparse
 import json
 import os

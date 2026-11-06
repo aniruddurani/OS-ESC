@@ -20,7 +20,7 @@ cd "$(dirname "$0")"
 
 # FPGA board stages run on the Windows host (Quartus, Npcap, SOEM), not in the container.
 case "${1:-}" in
-  bbuild|bprog|bstatus|bnet|bsoem|bselftest)
+  bbuild|bprog|bstatus|bnet|bwatch|bsoem|bselftest)
     exec mingw32-make --no-print-directory -f board.mk "$@"
     ;;
 esac
