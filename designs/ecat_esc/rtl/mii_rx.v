@@ -29,6 +29,8 @@ module mii_rx (
     reg       pend_valid;
     reg       pend_first;
     reg       bad;          // RX_ER seen in this frame
+    reg       tail;         // the frame ended: the last byte leaves on the next clock
+    reg       tail_err;
 
     always @(posedge rx_clk) begin
         valid <= 1'b0;
@@ -44,8 +46,20 @@ module mii_rx (
             pend_valid <= 1'b0;
             pend_first <= 1'b0;
             bad        <= 1'b0;
+            tail       <= 1'b0;
+            tail_err   <= 1'b0;
             data       <= 8'd0;
         end else begin
+            // One clock after rx_dv falls, so the last byte keeps the two-clock spacing of the
+            // others: the core relies on it (a frame cut inside a datagram ends on a data byte).
+            tail <= 1'b0;
+            if (tail) begin
+                valid <= 1'b1;
+                data  <= pend;
+                first <= pend_first;
+                last  <= 1'b1;
+                err   <= tail_err;
+            end
             case (state)
                 IDLE: if (rx_dv) begin
                     bad <= rx_er;
@@ -91,14 +105,9 @@ module mii_rx (
                             pend_valid <= 1'b1;
                         end
                     end else begin
-                        if (pend_valid) begin
-                            valid <= 1'b1;
-                            data  <= pend;
-                            first <= pend_first;
-                            last  <= 1'b1;
-                            err   <= bad | have_lo;
-                        end
-                        state <= IDLE;
+                        tail     <= pend_valid;
+                        tail_err <= bad | have_lo;
+                        state    <= IDLE;
                     end
                 end
                 default: if (!rx_dv) state <= IDLE;   // IGNORE: wait for the frame to end
