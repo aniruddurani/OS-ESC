@@ -95,9 +95,9 @@
   <div class="grid">
     <section class="panel"><h2>Traffic</h2><table id="totals"></table></section>
     <section class="panel"><h2>Flags</h2><div id="flags"></div>
-      <p class="hint">Must stay clear within ±100 ppm.</p></section>
+      <p class="hint" id="flagsHint">Must stay clear within ±100 ppm.</p></section>
     <section class="panel"><h2>Diag counters: RTL vs model</h2><table id="counters"><tr><td class="hint">after the first diag read</td></tr></table></section>
-    <section class="panel"><h2>Forwarding latency</h2><div id="latTxt" class="mono"></div>
+    <section class="panel"><h2 id="latTitle">Forwarding latency</h2><div id="latTxt" class="mono"></div>
       <svg id="spark" viewBox="0 0 240 60" preserveAspectRatio="none" style="height:60px"></svg></section>
     <section class="panel"><h2>Process RAM 0x1000–0x10FF</h2><div class="heat" id="heat"></div>
       <p class="hint"><span style="color:var(--write)">■</span> write <span style="color:var(--read)">■</span> read</p></section>
@@ -193,10 +193,12 @@ function build() {
     const sub = node(x, 92, isGap ? "+" + (k - shown) + " more" : "Slave " + i, "WKC –");
     L.nodes.push({ x, slave: isGap ? k - 1 : i, sub });
   }
-  node(L.esc.x, 120, "ESC", "RTL, last", "esc");
+  node(L.esc.x, 120, "ESC", cfg && cfg.board ? "FPGA, last" : "RTL, last", "esc");
   // inside the ESC
   el("rect", { x: 20, y: 188, width: 1160, height: 246, rx: 12, class: "escframe" }, g);
-  el("text", { x: 36, y: 210, class: "lbl" }, g, "Inside the ESC under test — live from the RTL's own signals (Verilator)");
+  el("text", { x: 36, y: 210, class: "lbl" }, g, cfg && cfg.board
+    ? "Inside the ESC on the FPGA — no probes here, so these blocks stay dark on the board"
+    : "Inside the ESC under test — live from the RTL's own signals (Verilator)");
   el("path", { d: `M ${L.esc.x} 130 V 188`, class: "wire", "stroke-dasharray": "4 4" }, g);
   const row = 262, sub = 380;
   const B = [["MII_RX", 100, row, "MII RX"], ["RX_FIFO", 270, row, "RX FIFO"], ["PARSER", 440, row, "Frame parser"],
@@ -315,7 +317,8 @@ function stats(s) {
   rows("totals", [["frames sent", s.sent], ["replies", s.replies],
     ["mismatches", s.mismatches, s.mismatches ? "bad" : "ok"], ["missing", s.missing, s.missing ? "bad" : ""],
     ["unexpected", s.unexpected, s.unexpected ? "bad" : ""], ["frames / s", s.fps.toFixed(1)],
-    ["simulated time", (s.sim_us / 1000).toFixed(3) + " ms"], ["core cycles", s.cycles.toLocaleString()]]);
+    cfg && cfg.board ? ["run time", (s.sim_us / 1e6).toFixed(1) + " s"] : ["simulated time", (s.sim_us / 1000).toFixed(3) + " ms"],
+    cfg && cfg.board ? ["latency shown", "PC round trip"] : ["core cycles", s.cycles.toLocaleString()]]);
   const f = s.flags_seen;
   $("flags").innerHTML = [["rx_overflow", 1], ["tx_overflow", 2], ["tx_underrun", 4], ["late (read data)", 8]]
     .map(([n, bit]) => `<div class="flag"><span class="dot ${f & bit ? "set" : "clear"}"></span>${n}</div>`).join("");
@@ -410,8 +413,15 @@ function onEvent(ev) {
   if (ev.type === "config") {
     cfg = ev;
     $("meta").textContent = `${ev.scenario} · ${ev.k} model slave${ev.k === 1 ? "" : "s"} + ESC · seed ${ev.seed}`;
-    rows("clocks", [["rx_clk offset", ev.rx_ppm.toFixed(1) + " ppm"], ["tx_clk offset", ev.tx_ppm.toFixed(1) + " ppm"],
-                    ["drift", ev.drift.toFixed(1) + " ppm/s"], ["core clock", "100 MHz"], ["MII clocks", "25 MHz"]]);
+    if (ev.board) {
+      $("meta").textContent += " · real DE2-115 board";
+      $("flagsHint").textContent = "Not read live on the board: bnet reads them over JTAG before and after a run.";
+      $("latTitle").textContent = "PC round trip (not ESC latency)";
+      rows("clocks", [["source", "real board"], ["core clock", "80 MHz (PLL)"], ["MII clocks", "25 MHz (from the PHY)"]]);
+    } else {
+      rows("clocks", [["rx_clk offset", ev.rx_ppm.toFixed(1) + " ppm"], ["tx_clk offset", ev.tx_ppm.toFixed(1) + " ppm"],
+                      ["drift", ev.drift.toFixed(1) + " ppm/s"], ["core clock", "100 MHz"], ["MII clocks", "25 MHz"]]);
+    }
     build();
   } else if (ev.type === "packet") {
     packets.set(ev.i, ev);

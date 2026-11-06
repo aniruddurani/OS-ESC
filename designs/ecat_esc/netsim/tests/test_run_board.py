@@ -1,15 +1,19 @@
 """run_board against a fake board: a link that answers every frame with the reference
 model's reply, and fake JTAG status functions. No NIC, Npcap or Quartus needed."""
 import copy
+import json
 import os
 import sys
 import tempfile
+import threading
+import time
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path[:0] = [os.path.join(HERE, ".."), os.path.join(HERE, "..", "..", "model"),
                 os.path.join(HERE, "..", "..", "tb"), os.path.join(HERE, "..", "..", "board")]
 
+import board_status  # noqa: E402
 import run_board  # noqa: E402
 import run_netsim  # noqa: E402
 from check import diag_reply  # noqa: E402
@@ -125,6 +129,44 @@ class RunPcapTest(unittest.TestCase):
         self.assertEqual(times, sorted(times))
         self.assertGreater(times[0], 0)
         self.assertEqual([f for _, f in packets][0::2], board.log["sent"])
+
+
+class WatchBoardTest(unittest.TestCase):
+    def _events(self, out, want_done=True):
+        path = os.path.join(out, "events.jsonl")
+        for _ in range(200):
+            time.sleep(0.05)
+            if os.path.exists(path):
+                with open(path) as f:
+                    evs = [json.loads(line) for line in f if line.strip()]
+                if not want_done or any(e["type"] == "done" for e in evs):
+                    return evs
+        self.fail("the watch run never finished")
+
+    def test_watch_board_resets_first_and_labels_the_run(self):
+        board = FakeBoard()
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as out:     # the run keeps its log open
+            threading.Thread(target=run_board.watch_board, daemon=True,
+                             args=(out, "x", "stp", "cyclic", 3, 1, 60, 0),
+                             kwargs=dict(board=board, make_link=board.make_link, speed=1024.0)).start()
+            evs = self._events(out)
+        self.assertEqual(board.calls[:3], ["reset", "read", "link"])
+        cfg = next(e for e in evs if e["type"] == "config")
+        self.assertTrue(cfg["board"])
+        self.assertEqual((cfg["rx_ppm"], cfg["tx_ppm"], cfg["drift"]), (0.0, 0.0, 0.0))
+        done = next(e for e in evs if e["type"] == "done")
+        self.assertEqual(done["mismatches"], 0)
+        self.assertGreater(done["replies"], 0)
+        packets = [e for e in evs if e["type"] == "packet"]
+        self.assertTrue(packets and all(p["match"] for p in packets))
+
+    def test_watch_board_refuses_a_board_without_link(self):
+        board = FakeBoard(before=dict(LINK_UP, state="configuring"))
+        with tempfile.TemporaryDirectory() as out:
+            with self.assertRaises(board_status.BoardError):
+                run_board.watch_board(out, "x", "stp", "cyclic", 3, 1, 60, 0, board=board,
+                                      make_link=board.make_link)
+        self.assertNotIn("link", board.calls)
 
 
 class RunOneLinkTest(unittest.TestCase):

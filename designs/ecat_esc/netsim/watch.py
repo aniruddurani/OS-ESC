@@ -5,7 +5,10 @@ A "packet" record carries the frame as the RTL received it, its reply, what the 
 expected when they differ, the working counter after every model slave, the latency, and
 the RTL's own events while the frame was inside it. At speed 8 and below every frame is
 sent alone and animated; above that frames go in batches and a few per second are
-recorded, while every mismatch is still published. Not a gate."""
+recorded, while every mismatch is still published. Not a gate.
+
+With `make_link` the frames go to the real board (run_board.py --watch): it has no probes,
+so a record carries no RTL events, the clocks are the real ones, and times are the host's."""
 import copy
 import json
 import os
@@ -51,21 +54,26 @@ class Publisher:
         self.log.flush()
 
 
-def watch(binary, scenario, k, seed, frames, port, out_dir):
+def watch(binary, scenario, k, seed, frames, port, out_dir, make_link=None, host="0.0.0.0",
+          speed=1.0):
     os.makedirs(out_dir, exist_ok=True)
-    srv = GuiServer(port=port)
+    srv = GuiServer(port=port, host=host)
+    srv.controls["speed"] = speed
     srv.start()
     pub = Publisher(srv, os.path.join(out_dir, "events.jsonl"))
     print(f"live view on http://127.0.0.1:{port}  ({scenario}, K={k}, seed {seed})", flush=True)
 
     config = dict(clock_config(scenario, seed), event_level=1)
-    link = Link(binary, config)
+    if make_link:
+        config.update(rx_ppm=0.0, tx_ppm=0.0, drift_ppm_per_s=0.0, event_level=0)
+    link = make_link(config) if make_link else Link(binary, config)
     chain = Chain(k)
     master = Master(scenario, seed, k=k, frames=frames)
     diag_tx = master.final_reads[0] if master.final_reads else None
     checker = Checker()
     pub(dict(type="config", scenario=scenario, k=k, seed=seed, frames=frames,
-             rx_ppm=config["rx_ppm"], tx_ppm=config["tx_ppm"], drift=config["drift_ppm_per_s"]))
+             rx_ppm=config["rx_ppm"], tx_ppm=config["tx_ppm"], drift=config["drift_ppm_per_s"],
+             board=bool(make_link)))
 
     pending = {}                 # bench index -> packet record still waiting for its reply
     sent_n = generated = 0
@@ -86,10 +94,13 @@ def watch(binary, scenario, k, seed, frames, port, out_dir):
         n = 1 if slow else 32
         batch = []
         for _ in range(n):
+            next_tx = master.next_batch(1)
+            if not next_tx:
+                break
             if diag_tx is not None and generated and generated % DIAG_EVERY == 0 and \
                     (not batch or batch[-1] is not diag_tx):
                 batch.append(diag_tx)
-            batch += master.next_batch(1)
+            batch += next_tx
             generated += 1
         batch = [t for t in batch if t is not None]
         if not batch:
@@ -151,7 +162,8 @@ def watch(binary, scenario, k, seed, frames, port, out_dir):
         for i in [i for i, p in pending.items() if p.get("t0", 0) + 4 * ALLOWANCE_PS < status["t_ps"]]:
             pending.pop(i)                       # missing replies: counted by the checker
         wall = time.time() - started
-        pub(dict(type="stats", sim_us=status["t_ps"] / 1e6, cycles=status["core_cycles"],
+        pub(dict(type="stats", sim_us=(wall * 1e6 if make_link else status["t_ps"] / 1e6),
+                 cycles=status["core_cycles"],
                  fps=checker.metrics["replies"] / wall if wall else 0, **checker.metrics))
         if slow:
             time.sleep(FRAME_SECONDS / speed)
