@@ -16,6 +16,8 @@ FetchContent_Declare(soem
 set(SOEM_BUILD_SAMPLES OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(soem)
 
-add_executable(soem_test soem_test.c)
-target_link_directories(soem_test PRIVATE ${NPCAP_SDK}/Lib/x64)
-target_link_libraries(soem_test PRIVATE soem wpcap Packet ws2_32 winmm)
+foreach(program soem_test soem_config)
+    add_executable(${program} ${program}.c)
+    target_link_directories(${program} PRIVATE ${NPCAP_SDK}/Lib/x64)
+    target_link_libraries(${program} PRIVATE soem wpcap Packet ws2_32 winmm)
+endforeach()

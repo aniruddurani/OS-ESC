@@ -225,15 +225,33 @@ def evaluate_bnet(results, manifest, size, build):
 
 
 SOEM_CHECKS = ("brd_count", "station_address", "fmmu_config", "sm_config", "lrw_cycles")
+SOEM_CONFIG_CHECKS = ("found_one", "identity", "name", "mapping", "safe_op", "op", "inputs_seen",
+                      "cycles_ok", "outputs_ram", "back_to_init")
 SOEM_MIN_CYCLES = 10000
 
 
-def evaluate_bsoem(result, before, after, build):
-    """Verdict on the SOEM low-level test's JSON (None if it printed none): all five checks
-    present and true, over at least SOEM_MIN_CYCLES LRW cycles. `before` and `after` are the
-    board's status around the test (None if unreadable): a board that was not there, not
-    linked or not the build `build` is an error whatever the checks say, and a FIFO flag or
-    a lost link after the test is a failure."""
+def _soem_program(label, result, names):
+    """(metrics, errors, failures) of one SOEM program's JSON (None if it printed none): every
+    check present and true, over at least SOEM_MIN_CYCLES cycles."""
+    if result is None:
+        return {}, [{"message": f"{label} printed no result"}], []
+    checks = result.get("checks") or {}
+    cyc = result.get("cycle_us") or {}
+    metrics = dict(cycles=result.get("cycles"), cycle_us_min=cyc.get("min"),
+                   cycle_us_median=cyc.get("median"), cycle_us_max=cyc.get("max"), checks=checks)
+    errors = [{"message": f"{label} did not report {name}"} for name in names if name not in checks]
+    if (result.get("cycles") or 0) < SOEM_MIN_CYCLES:
+        errors.append({"message": f"{label}: {result.get('cycles')} cycles, needs {SOEM_MIN_CYCLES}"})
+    failures = [{"message": f"{label} check {name} failed"} for name in names
+                if name in checks and checks[name] is not True]
+    return metrics, errors, failures
+
+
+def evaluate_bsoem(result, config_result, before, after, build):
+    """Verdict on the two SOEM programs' JSON: the low-level test and SOEM's standard start-up.
+    `before` and `after` are the board's status around them (None if unreadable): a board that
+    was not there, not linked or not the build `build` is an error whatever the checks say,
+    and a FIFO flag or a lost link after them is a failure."""
     if before is None or after is None:
         return "error", {}, [{"message": "board status could not be read around the SOEM test"}]
     other = _other_image(before, build)
@@ -241,17 +259,11 @@ def evaluate_bsoem(result, before, after, build):
         return "error", {}, [{"message": other}]
     if before["state"] != "link_100fd":
         return "error", {}, [{"message": f"board not ready: PHY state {before['state']}"}]
-    if result is None:
-        return "error", {}, [{"message": "the SOEM test printed no result"}]
-    checks = result.get("checks") or {}
-    cyc = result.get("cycle_us") or {}
-    metrics = dict(cycles=result.get("cycles"), cycle_us_min=cyc.get("min"),
-                   cycle_us_median=cyc.get("median"), cycle_us_max=cyc.get("max"), checks=checks)
-    errors = [{"message": f"SOEM test did not report {name}"} for name in SOEM_CHECKS if name not in checks]
-    if (result.get("cycles") or 0) < SOEM_MIN_CYCLES:
-        errors.append({"message": f"{result.get('cycles')} LRW cycles, needs {SOEM_MIN_CYCLES}"})
-    failures = [{"message": f"SOEM check {name} failed"} for name in SOEM_CHECKS
-                if name in checks and checks[name] is not True]
+    metrics, errors, failures = _soem_program("the SOEM test", result, SOEM_CHECKS)
+    config, config_errors, config_failures = _soem_program("soem_config", config_result, SOEM_CONFIG_CHECKS)
+    metrics.update({f"config_{k}": v for k, v in config.items()})
+    errors += config_errors
+    failures += config_failures
     if after["state"] != "link_100fd":
         failures.append({"message": f"PHY state {after['state']} after the test"})
     set_flags = [k for k, v in after["sticky"].items() if v]

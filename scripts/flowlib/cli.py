@@ -256,19 +256,20 @@ def cmd_bnet(a):
 
 
 def cmd_bsoem(a):
-    """bsoem: the SOEM low-level test's JSON result against the board."""
+    """bsoem: the two SOEM programs' JSON results against the board."""
     from flowlib.board import evaluate_bsoem
-    text = _read(a.result) or ""
-    line = next((s for s in text.splitlines() if s.startswith("{")), None)
-    try:
-        result = json.loads(line) if line else None
-    except ValueError:
-        result = None
+    def program(path):
+        line = next((s for s in (_read(path) or "").splitlines() if s.startswith("{")), None)
+        try:
+            return json.loads(line) if line else None
+        except ValueError:
+            return None
     build = _read_build_id(a.build_id_file)
     if build is None:
         return write_report(a.out, "bsoem", a.design, "error", {},
                             [{"message": f"evidence missing: {a.build_id_file}"}], a.result)
-    status, metrics, errors = evaluate_bsoem(result, _read_json(a.before), _read_json(a.after), build)
+    status, metrics, errors = evaluate_bsoem(program(a.result), program(a.config_result),
+                                             _read_json(a.before), _read_json(a.after), build)
     return write_report(a.out, "bsoem", a.design, status, metrics, errors, a.result)
 
 
@@ -542,6 +543,7 @@ def build_parser():
 
     s = sub.add_parser("bsoem")
     s.add_argument("--result", required=True, help="the SOEM test's stdout")
+    s.add_argument("--config-result", required=True, help="soem_config's stdout")
     s.add_argument("--before", required=True, help="board status before the test")
     s.add_argument("--after", required=True, help="board status after the test")
     s.add_argument("--build-id-file", required=True)

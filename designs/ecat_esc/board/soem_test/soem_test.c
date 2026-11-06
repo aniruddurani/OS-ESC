@@ -13,7 +13,7 @@
 
 #include "soem/soem.h"
 
-#define TIMEOUT   EC_TIMEOUTRET      /* 2 ms */
+#define TIMEOUT   (10 * EC_TIMEOUTRET)   /* 20 ms: Windows can hold a reply past 2 ms; a lost frame still fails */
 #define STATION   0x1001
 #define LOG_ADDR  0x00010000u
 #define PD_ADDR   0x1000

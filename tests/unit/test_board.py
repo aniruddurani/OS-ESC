@@ -335,10 +335,44 @@ SOEM_OK = {"checks": {"brd_count": True, "station_address": True, "fmmu_config":
            "pass": True, "cycle_us": {"min": 300.0, "median": 450.0, "max": 900.0}, "cycles": 10000}
 
 
+CONFIG_OK = {"checks": {name: True for name in (
+    "found_one", "identity", "name", "mapping", "safe_op", "op", "inputs_seen", "cycles_ok",
+    "outputs_ram", "back_to_init")},
+    "pass": True, "cycle_us": {"min": 300.0, "median": 450.0, "max": 900.0}, "cycles": 10000}
+
+
+class BsoemConfigTest(unittest.TestCase):
+    def verdict(self, config):
+        from flowlib.board import evaluate_bsoem
+        return evaluate_bsoem(SOEM_OK, config, LINK, LINK, 1)
+
+    def test_bsoem_needs_both_programs(self):
+        status, metrics, errors = self.verdict(CONFIG_OK)
+        self.assertEqual(status, "pass", errors)
+        self.assertEqual(metrics["config_cycles"], 10000)
+        self.assertEqual(metrics["config_cycle_us_median"], 450.0)
+
+    def test_config_check_false_is_fail(self):
+        status, _, errors = self.verdict(dict(CONFIG_OK, checks=dict(CONFIG_OK["checks"], identity=False)))
+        self.assertEqual(status, "fail")
+        self.assertIn("identity", errors[0]["message"])
+
+    def test_config_no_json_is_error(self):
+        self.assertEqual(self.verdict(None)[0], "error")
+
+    def test_config_missing_check_is_error(self):
+        checks = dict(CONFIG_OK["checks"])
+        del checks["op"]
+        self.assertEqual(self.verdict(dict(CONFIG_OK, checks=checks))[0], "error")
+
+    def test_config_too_few_cycles_is_error(self):
+        self.assertEqual(self.verdict(dict(CONFIG_OK, cycles=10))[0], "error")
+
+
 class BsoemTest(unittest.TestCase):
     def test_bsoem_all_checks_pass(self):
         from flowlib.board import evaluate_bsoem
-        status, metrics, errors = evaluate_bsoem(SOEM_OK, LINK, LINK, 1)
+        status, metrics, errors = evaluate_bsoem(SOEM_OK, CONFIG_OK, LINK, LINK, 1)
         self.assertEqual(status, "pass", errors)
         self.assertEqual(metrics["cycles"], 10000)
         self.assertEqual(metrics["cycle_us_median"], 450.0)
@@ -346,49 +380,49 @@ class BsoemTest(unittest.TestCase):
     def test_bsoem_one_check_false_is_fail(self):
         from flowlib.board import evaluate_bsoem
         res = dict(SOEM_OK, checks=dict(SOEM_OK["checks"], fmmu_config=False), **{"pass": False})
-        status, _, errors = evaluate_bsoem(res, LINK, LINK, 1)
+        status, _, errors = evaluate_bsoem(res, CONFIG_OK, LINK, LINK, 1)
         self.assertEqual(status, "fail")
         self.assertIn("fmmu_config", errors[0]["message"])
 
     def test_bsoem_no_json_is_error(self):
         from flowlib.board import evaluate_bsoem
-        status, _, _ = evaluate_bsoem(None, LINK, LINK, 1)
+        status, _, _ = evaluate_bsoem(None, CONFIG_OK, LINK, LINK, 1)
         self.assertEqual(status, "error")
 
     def test_bsoem_missing_check_is_error(self):
         from flowlib.board import evaluate_bsoem
         checks = dict(SOEM_OK["checks"])
         del checks["lrw_cycles"]
-        status, _, _ = evaluate_bsoem(dict(SOEM_OK, checks=checks), LINK, LINK, 1)
+        status, _, _ = evaluate_bsoem(dict(SOEM_OK, checks=checks), CONFIG_OK, LINK, LINK, 1)
         self.assertEqual(status, "error")
 
     def test_bsoem_board_absent_is_error_even_with_failed_checks(self):
         from flowlib.board import evaluate_bsoem
         res = dict(SOEM_OK, checks={k: False for k in SOEM_OK["checks"]}, **{"pass": False})
-        status, _, _ = evaluate_bsoem(res, None, None, 1)
+        status, _, _ = evaluate_bsoem(res, CONFIG_OK, None, None, 1)
         self.assertEqual(status, "error")
 
     def test_bsoem_no_link_before_is_error(self):
         from flowlib.board import evaluate_bsoem
-        status, _, errors = evaluate_bsoem(SOEM_OK, dict(LINK, state="configuring"), LINK, 1)
+        status, _, errors = evaluate_bsoem(SOEM_OK, CONFIG_OK, dict(LINK, state="configuring"), LINK, 1)
         self.assertEqual(status, "error")
         self.assertIn("configuring", errors[0]["message"])
 
     def test_bsoem_other_image_is_error(self):
         from flowlib.board import evaluate_bsoem
-        status, _, _ = evaluate_bsoem(SOEM_OK, LINK, LINK, 77)
+        status, _, _ = evaluate_bsoem(SOEM_OK, CONFIG_OK, LINK, LINK, 77)
         self.assertEqual(status, "error")
 
     def test_bsoem_flag_after_the_run_is_fail(self):
         from flowlib.board import evaluate_bsoem
         after = dict(LINK, sticky=dict(LINK["sticky"], rx_overflow=1))
-        status, _, errors = evaluate_bsoem(SOEM_OK, LINK, after, 1)
+        status, _, errors = evaluate_bsoem(SOEM_OK, CONFIG_OK, LINK, after, 1)
         self.assertEqual(status, "fail")
         self.assertIn("rx_overflow", errors[0]["message"])
 
     def test_bsoem_too_few_cycles_is_error(self):
         from flowlib.board import evaluate_bsoem
-        status, _, _ = evaluate_bsoem(dict(SOEM_OK, cycles=10), LINK, LINK, 1)
+        status, _, _ = evaluate_bsoem(dict(SOEM_OK, cycles=10), CONFIG_OK, LINK, LINK, 1)
         self.assertEqual(status, "error")
 
 

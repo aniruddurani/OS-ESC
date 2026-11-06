@@ -92,25 +92,31 @@ $(DSTAMPS)/$(BNET_TAG).pass: $(DSTAMPS)/bprog.pass $(wildcard designs/$(DDESIGN)
 	  --build-id-file $(BUILD_ID_FILE) --design $(DDESIGN) --out $(DREPORTS)/$(BNET_TAG).json
 	@touch $@
 
-# SOEM's low-level calls against the board (BRD, addressing, FMMU, SyncManagers, cyclic
-# LRW). SOEM is fetched by CMake at a pinned tag; the Npcap SDK is at NPCAP_SDK.
+# Two SOEM programs against the board: its low-level calls (BRD, addressing, FMMU,
+# SyncManagers, cyclic LRW), and its standard start-up through to OP and cyclic process data,
+# each after a soft reset. SOEM is fetched by CMake at a pinned tag; the Npcap SDK is at NPCAP_SDK.
 NPCAP_SDK ?= C:/npcap-sdk
 SOEM_DIR  ?= $(DBUILD)/board/soem
 SOEM_EXE  := $(SOEM_DIR)/soem_test.exe
+SOEM_CONFIG_EXE := $(SOEM_DIR)/soem_config.exe
 BOARD_NPF ?= $(shell powershell -NoProfile -Command "'\Device\NPF_' + (Get-NetAdapter -Name '$(BOARD_NIC)').InterfaceGuid")
 .PHONY: bsoem
 bsoem: $(DSTAMPS)/bsoem.pass
-$(SOEM_EXE): $(BOARD)/../soem_test/soem_test.c $(BOARD)/../soem_test/CMakeLists.txt
+$(SOEM_EXE) $(SOEM_CONFIG_EXE): $(wildcard $(BOARD)/../soem_test/*.c) $(BOARD)/../soem_test/CMakeLists.txt
 	cmake -G "MinGW Makefiles" -S designs/$(DDESIGN)/board/soem_test -B $(SOEM_DIR) \
 	  -DNPCAP_SDK=$(NPCAP_SDK) > $(DLOGS)/soem_build.log 2>&1
 	mingw32-make -C $(SOEM_DIR) >> $(DLOGS)/soem_build.log 2>&1
-$(DSTAMPS)/bsoem.pass: $(DSTAMPS)/bprog.pass $(SOEM_EXE)
+$(DSTAMPS)/bsoem.pass: $(DSTAMPS)/bprog.pass $(SOEM_EXE) $(SOEM_CONFIG_EXE)
 	@mkdir -p $(DREPORTS) $(DLOGS) $(DSTAMPS)
-	@rm -f $@ $(DREPORTS)/bsoem.json $(DLOGS)/bsoem.out $(DLOGS)/bsoem_before.json $(DLOGS)/bsoem_after.json
+	@rm -f $@ $(DREPORTS)/bsoem.json $(DLOGS)/bsoem.out $(DLOGS)/bsoem_config.out \
+	  $(DLOGS)/bsoem_before.json $(DLOGS)/bsoem_after.json
 	-$(BSTATUS) reset --stp "$(STP)" > $(DLOGS)/bsoem_before.json
 	-"$(SOEM_EXE)" '$(BOARD_NPF)' > $(DLOGS)/bsoem.out 2> $(DLOGS)/bsoem.err
+	-$(BSTATUS) reset --stp "$(STP)" > /dev/null
+	-"$(SOEM_CONFIG_EXE)" '$(BOARD_NPF)' > $(DLOGS)/bsoem_config.out 2> $(DLOGS)/bsoem_config.err
 	-$(BSTATUS) read --stp "$(STP)" > $(DLOGS)/bsoem_after.json
-	$(PY) bsoem --result $(DLOGS)/bsoem.out --before $(DLOGS)/bsoem_before.json \
+	$(PY) bsoem --result $(DLOGS)/bsoem.out --config-result $(DLOGS)/bsoem_config.out \
+	  --before $(DLOGS)/bsoem_before.json \
 	  --after $(DLOGS)/bsoem_after.json --build-id-file $(BUILD_ID_FILE) \
 	  --design $(DDESIGN) --out $(DREPORTS)/bsoem.json
 	@touch $@
