@@ -1,6 +1,6 @@
 # EtherCAT ESC on the DE2-115: FPGA prototype before tapeout
 
-Status: design approved in conversation 2026-11-04; awaiting review of this written spec.
+Status: implemented; on the real board `bnet`, the soak and `bsoem` pass (section 11).
 Supersedes the sketch in section 9 of `2026-11-03-ecat-esc-netsim-design.md`.
 
 ## 1. Purpose
@@ -194,3 +194,24 @@ Each fault must be caught by the gate built for it:
 
 AL state machine, SII EEPROM, `ec_config_init`, TwinCAT, the second Ethernet port and
 multi-port forwarding, distributed clocks, flash programming, sky130 timing.
+
+## 11. As built
+
+Results on the board (2026-11-05): `bbuild` at 80 MHz, setup +3.277 ns, hold +0.136 ns, 8,614
+LEs (7.5%). `bnet` 20,007 frames and the soak 1,000,023 frames, no mismatch, missing or
+unexpected reply and no FIFO flag. `bsoem` all five checks over 10,000 LRW cycles, median
+492 us.
+
+Where the build differs from the text above:
+
+- **`phy_init`'s MDIO** is `mdio_i`, `mdio_o`, `mdio_oe`; `esc_board` drives the pad.
+- **`bbuild`** reads Quartus's own `sta.rpt`, with no script of ours in between.
+- **The RTL Quartus compiles** is a build-time copy of `rtl/` without `pdram.v`'s `$error`
+  check, which Quartus Lite cannot parse. The check fires only for an invalid `RAM_BYTES`.
+- **In flight**: one frame at a time, not up to 8, because Npcap's inbound-only filter is
+  unavailable on the I219-V and the NIC's copy of a sent frame has to be told from the reply.
+- **SOEM** is v2.0.1; v1.4.0's Windows layer builds only with MSVC.
+- **The no-link check** is its own step, `./flow bselftest STEP=nolink`, with the cable
+  unplugged.
+- **The first replay capture** has one allowed difference, the final diag read (see
+  `designs/ecat_esc/captures/README.md`).
