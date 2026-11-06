@@ -1,6 +1,6 @@
 # EtherCAT ESC: AL state machine and SII
 
-Status: design approved in conversation 2026-11-05; awaiting review of this written spec.
+Status: built on `feat/esc-al-sii`; section 11 records what differs from the design.
 Builds on `2026-11-04-ecat-esc-de2-115-design.md` (the board flow) and branches from
 `feat/board-de2-115`.
 
@@ -199,3 +199,45 @@ If `dpnr` misses timing at 100 MHz, work stops and the failing paths go to the u
 
 Mailbox and CoE, an ESI file and a TwinCAT run, an I2C EEPROM, I/O pins or a PDI, distributed
 clocks, SyncManager gating of process data, AL transition checks and error codes.
+
+## 11. As built (2026-11-06)
+
+SOEM's standard start-up reaches OP on the DE2-115 and its real traffic replays through the
+RTL in `dsim` with no allowed differences. Sections 1 to 10 hold, with these additions:
+
+- **`rtl/mii_rx.v` changed.** The soak found a `late` flag on a frame cut inside a datagram
+  (`faults_k3_s2`, frame 4774). The old RTL failed at the same frame and picosecond, so the fault
+  was already there. The last byte left half a byte early, 4 core clocks at 100 MHz against the 6
+  the core assumes. It now leaves one clock after `rx_dv` falls, at the usual spacing.
+  `test_rx_last_byte_keeps_full_byte_spacing` and `test_rx_frame_after_a_short_gap` pin this.
+- **`esc_core` routes 0x0120 to 0x014F and 0x0500 to 0x05FF to `al_sii`**, wider than the
+  registers in section 4, so the rest of those ranges read 0 from `al_sii`.
+- **Dependent registers.** The model's physical path reads everything, then writes, and the
+  RTL sees its own write. A read-write datagram spanning 0x0120 and 0x0132, or 0x0502 and
+  0x050C, would differ, so random traffic moves such a datagram to RAM. It means nothing to a
+  master.
+- **`soem_sequence` runs at the end of `startup()`**, after the RAM
+  clear.
+- **SOEM calls on the board wait 20 ms.** SOEM's 2 ms was passed about once in 5,000 cycles on
+  Windows, and on the first BRD under CPU load. A lost frame still fails.
+- **The gates gained three checks in the final review.** `dsim`'s stamp depends on `captures/`,
+  the replay fails if a required capture is missing or empty, and `bsoem` is an error if the soft
+  reset between its two programs fails.
+- **`dpnr` needed more antenna repair.** The default three rounds after detailed routing left
+  one net, so `default.yaml` sets `DRT_ANTENNA_REPAIR_ITERS: 6`. The gate still wants zero.
+
+| Check | Result on the final RTL |
+|---|---|
+| `./flow test` | 274 and 69 tests |
+| `dlint` | zero warnings |
+| `dsim` | 116 tests, both captures replayed |
+| `dnet`, soak | 20,020 frames; 1,000,025 frames, no mismatch, late 0 |
+| `dselftest` | 68 checks |
+| `dpnr` default | setup +0.461 ns, hold +0.086 ns on nine corners; DRC, LVS and antenna clean |
+| `bbuild` | setup +3.031 ns, hold +0.099 ns at 80 MHz, 8,995 LEs |
+| `bnet`, soak | 20,007 frames; 1,000,023 frames, no mismatch |
+| `bsoem` | both programs, 10,000 cycles each |
+| `bselftest` | 22 checks; `STEP=nolink` passes |
+
+The two captures were recorded before the `mii_rx` change and still replay on the final RTL.
+No master but SOEM has been run. The identity in `sii.py` is still the placeholder.

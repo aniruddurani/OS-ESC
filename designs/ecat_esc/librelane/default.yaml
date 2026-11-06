@@ -33,3 +33,7 @@ PNR_CORNERS:
 PL_RESIZER_SETUP_SLACK_MARGIN: 4.0
 RUN_POST_GRT_RESIZER_TIMING: true
 GRT_RESIZER_SETUP_SLACK_MARGIN: 3.0
+
+# Repair effort only, the antenna gate is unchanged. Each repair round after detailed routing
+# routes again and can move a net; three rounds (the default) left one net on 2026-11-06.
+DRT_ANTENNA_REPAIR_ITERS: 6
